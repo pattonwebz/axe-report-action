@@ -1,0 +1,25 @@
+name: 'Axe Report'
+description: 'Turn raw axe-core JSON results into a readable accessibility report in the job summary, with configurable pass/fail thresholds.'
+author: 'William Patton'
+branding:
+  icon: 'file-text'
+  color: 'purple'
+
+inputs:
+  results-file:
+    description: 'Path to a JSON file of axe-core results — the output of axe-scan-action, or a raw array of axe result objects (e.g. from @axe-core/cli).'
+    required: true
+  fail-on:
+    description: 'Minimum violation impact that fails the job: critical, serious, moderate, minor, or none to always pass.'
+    required: false
+    default: 'serious'
+
+outputs:
+  total-violations:
+    description: 'Total number of violations (counted per affected element) across all URLs.'
+  failed-urls:
+    description: 'Number of URLs that could not be scanned or had violations at/above the fail-on level.'
+
+runs:
+  using: 'node24'
+  main: 'dist/index.js'
