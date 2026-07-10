@@ -1,0 +1,23 @@
+{
+  "name": "axe-report-action",
+  "version": "1.0.0",
+  "description": "GitHub Action: turn axe-core JSON results into a job-summary report with pass/fail thresholds",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "ncc build src/main.ts -o dist --license licenses.txt",
+    "typecheck": "tsc"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@actions/core": "^1.11.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@vercel/ncc": "^0.44.1",
+    "axe-core": "^4.12.1",
+    "typescript": "^5.9.3"
+  }
+}

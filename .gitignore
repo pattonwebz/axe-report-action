@@ -1,0 +1,4 @@
+# dist/ is committed on purpose: GitHub runs actions straight from the
+# checked-out repo with no npm install. Everything bundles, so node_modules
+# stays out entirely (unlike the scanner action).
+node_modules/
