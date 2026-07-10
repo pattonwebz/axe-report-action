@@ -13,7 +13,7 @@ It doesn't run any scans itself, so it composes with however you already run axe
 ```yaml
 - name: Scan
   id: scan
-  uses: pattonwebz/axe-scan-action@v1
+  uses: pattonwebz/axe-scan-action@v0.0.1
   with:
     urls: |
       https://example.com/
@@ -21,7 +21,7 @@ It doesn't run any scans itself, so it composes with however you already run axe
 
 - name: Report
   if: always()
-  uses: pattonwebz/axe-report-action@v1
+  uses: pattonwebz/axe-report-action@v0.0.1
   with:
     results-file: ${{ steps.scan.outputs.results-file }}
     fail-on: serious
@@ -31,7 +31,7 @@ Or from `@axe-core/cli`:
 
 ```yaml
 - run: npx @axe-core/cli https://example.com/ --save axe-results.json
-- uses: pattonwebz/axe-report-action@v1
+- uses: pattonwebz/axe-report-action@v0.0.1
   with:
     results-file: axe-results.json
 ```
