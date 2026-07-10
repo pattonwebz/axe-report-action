@@ -1,0 +1,48 @@
+name: Self-test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  build-check:
+    name: dist/ is up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Fail if dist/ differs from committed dist/
+        run: git diff --exit-code dist/
+
+  report:
+    name: Report on fixture results
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Report with serious threshold (expect failure)
+        id: serious
+        continue-on-error: true
+        uses: ./
+        with:
+          results-file: tests/fixtures/scan-results.json
+          fail-on: serious
+      - name: Report with no threshold (expect success)
+        id: none
+        uses: ./
+        with:
+          results-file: tests/fixtures/scan-results.json
+          fail-on: none
+      - name: Assert both thresholds behaved correctly
+        run: |
+          echo "serious: outcome=${{ steps.serious.outcome }} total=${{ steps.serious.outputs.total-violations }} failed=${{ steps.serious.outputs.failed-urls }}"
+          test "${{ steps.serious.outcome }}" = "failure"
+          test "${{ steps.serious.outputs.total-violations }}" = "6"
+          test "${{ steps.serious.outputs.failed-urls }}" = "2"
+          test "${{ steps.none.outcome }}" = "success"
+          test "${{ steps.none.outputs.failed-urls }}" = "1"
