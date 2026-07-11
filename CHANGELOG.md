@@ -2,7 +2,7 @@
 
 Notable changes to this action. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.0.2] — 2026-07-11
 
 ### Added
 
@@ -10,7 +10,7 @@ Notable changes to this action. Format follows [Keep a Changelog](https://keepac
 
 ### Changed
 
-- README: the combined usage example uses the JSON `urls` format introduced in the upcoming axe-scan-action release.
+- README: the combined usage example uses the JSON `urls` format introduced in axe-scan-action v0.0.2.
 
 ## [0.0.1] — 2026-07-10
 
