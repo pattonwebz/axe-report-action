@@ -15,9 +15,7 @@ It doesn't run any scans itself, so it composes with however you already run axe
   id: scan
   uses: pattonwebz/axe-scan-action@v0.0.1
   with:
-    urls: |
-      https://example.com/
-      https://example.com/contact/
+    urls: '["https://example.com/", "https://example.com/contact/"]'
 
 - name: Report
   if: always()
