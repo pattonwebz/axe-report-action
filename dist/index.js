@@ -25715,101 +25715,6 @@ run();
 
 /***/ }),
 
-/***/ 1746:
-/***/ ((__unused_webpack_module, exports) => {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.ruleToPersonaKeys = exports.personaByKey = exports.personas = void 0;
-exports.personasForRule = personasForRule;
-exports.personas = [
-    {
-        key: 'ashleigh',
-        name: 'Ashleigh',
-        userType: 'Blind & Screen Reader Users',
-        identity: 'Partially sighted, uses JAWS and other screen reader features',
-        needs: 'Clear semantic structure, labelled controls, and full keyboard access',
-    },
-    {
-        key: 'claudia',
-        name: 'Claudia',
-        userType: 'Low-Vision & Magnification Users',
-        identity: 'Partially sighted (glaucoma, diabetes), uses ZoomText and a large monitor',
-        needs: 'Strong contrast, predictable layout, content that reflows under magnification',
-    },
-    {
-        key: 'christopher',
-        name: 'Christopher',
-        userType: 'Motor & Dexterity Users',
-        identity: 'Has rheumatoid arthritis, prefers keyboard access, exploring speech recognition',
-        needs: 'Full keyboard operability, generous touch targets, no drag-and-drop-only controls',
-    },
-    {
-        key: 'pawel',
-        name: 'Pawel',
-        userType: 'Autistic & Cognitive-Load-Sensitive Users',
-        identity: 'Autistic, experiences anxiety, prefers simpler and less cluttered interfaces',
-        needs: 'Predictable layouts, plain language, minimal motion and distraction',
-    },
-    {
-        key: 'ron',
-        name: 'Ron',
-        userType: 'Older Users',
-        identity: 'Older user with arthritis, cataracts, and hearing loss',
-        needs: 'Large text, high contrast, and simple, uncluttered forms',
-    },
-    {
-        key: 'saleem',
-        name: 'Saleem',
-        userType: 'Deaf & Hard-of-Hearing Users',
-        identity: 'Profoundly deaf, BSL is his first language',
-        needs: 'Accurate captions and transcripts, and non-audio contact routes',
-    },
-    {
-        key: 'simone',
-        name: 'Simone',
-        userType: 'Dyslexic Users',
-        identity: 'Dyslexic, benefits from plain language and strong structure',
-        needs: 'Clear headings, readable typography, and uncomplicated forms',
-    },
-];
-exports.personaByKey = new Map(exports.personas.map((persona) => [persona.key, persona]));
-/** axe-core rule ID -> persona keys most likely affected. */
-exports.ruleToPersonaKeys = {
-    label: ['ashleigh', 'christopher', 'claudia', 'ron', 'simone'],
-    'button-name': ['ashleigh', 'christopher', 'claudia', 'ron', 'simone'],
-    'link-name': ['ashleigh', 'christopher', 'claudia', 'ron', 'simone'],
-    'image-alt': ['ashleigh', 'ron', 'simone'],
-    'color-contrast': ['claudia', 'ron', 'simone'],
-    'aria-hidden-focus': ['ashleigh', 'christopher', 'claudia', 'ron'],
-    bypass: ['ashleigh', 'christopher', 'claudia', 'ron'],
-    region: ['ashleigh', 'christopher', 'claudia', 'ron'],
-    list: ['ashleigh', 'ron', 'simone', 'saleem'],
-    listitem: ['ashleigh', 'ron', 'simone', 'saleem'],
-    'heading-order': ['ashleigh', 'claudia', 'ron', 'simone'],
-    'target-size': ['christopher', 'ron', 'claudia'],
-    'meta-viewport': ['claudia', 'ron'],
-    'document-title': ['ashleigh', 'claudia', 'ron', 'simone', 'saleem'],
-    'duplicate-id-active': ['ashleigh', 'christopher', 'claudia', 'ron'],
-    tabindex: ['ashleigh', 'christopher', 'claudia', 'ron'],
-    'nested-interactive': ['ashleigh', 'christopher', 'claudia', 'ron'],
-    'html-has-lang': ['ashleigh', 'saleem', 'simone', 'ron', 'pawel'],
-    'valid-lang': ['ashleigh', 'saleem', 'simone', 'ron', 'pawel'],
-    'video-caption': ['saleem', 'pawel', 'simone'],
-    'audio-caption': ['saleem'],
-    blink: ['pawel', 'simone'],
-    'meta-refresh-no-exceptions': ['ashleigh', 'christopher', 'ron', 'pawel', 'simone'],
-};
-function personasForRule(ruleId) {
-    return (exports.ruleToPersonaKeys[ruleId] ?? [])
-        .map((key) => exports.personaByKey.get(key))
-        .filter((persona) => Boolean(persona));
-}
-
-
-/***/ }),
-
 /***/ 665:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
@@ -25849,131 +25754,24 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.IMPACT_ORDER = void 0;
-exports.normalizeResults = normalizeResults;
+exports.IMPACT_ORDER = exports.normalizeResults = void 0;
 exports.writeReport = writeReport;
 const core = __importStar(__nccwpck_require__(7484));
-const personas_1 = __nccwpck_require__(1746);
-exports.IMPACT_ORDER = ['minor', 'moderate', 'serious', 'critical'];
-function impactRank(impact) {
-    return exports.IMPACT_ORDER.indexOf((impact ?? 'minor'));
-}
+const axe_a11y_report_1 = __nccwpck_require__(5671);
+Object.defineProperty(exports, "normalizeResults", ({ enumerable: true, get: function () { return axe_a11y_report_1.normalizeResults; } }));
+Object.defineProperty(exports, "IMPACT_ORDER", ({ enumerable: true, get: function () { return axe_a11y_report_1.IMPACT_ORDER; } }));
 /**
- * Accept either axe-scan-action output ({ url, results?, error? } entries)
- * or a raw array of axe result objects (e.g. from `@axe-core/cli --save`,
- * where each entry is the results object itself with a `url` property).
- */
-function normalizeResults(parsed) {
-    if (!Array.isArray(parsed)) {
-        throw new Error('Results file must contain a JSON array.');
-    }
-    return parsed.map((entry, i) => {
-        if (entry && typeof entry === 'object' && 'violations' in entry) {
-            const res = entry;
-            return { url: res.url || `result ${i + 1}`, results: res };
-        }
-        if (entry && typeof entry === 'object' && 'url' in entry) {
-            return entry;
-        }
-        throw new Error(`Unrecognized results entry at index ${i}.`);
-    });
-}
-/**
- * Write a human-friendly markdown report to the GitHub job summary and
- * return the numbers main() needs for outputs and pass/fail.
+ * This action is a thin GitHub Actions wrapper around @pattonwebz/axe-a11y-report:
+ * it builds the Markdown report there, then writes it to the job summary here.
+ * See that package if you want the same report somewhere other than a GitHub
+ * Actions job summary (a local script, a PR comment, another CI system).
  */
 async function writeReport(results, failOn, showPersonas = false) {
-    const failThreshold = failOn === 'none' ? Infinity : impactRank(failOn);
-    let totalViolations = 0;
-    let failedUrls = 0;
-    core.summary.addHeading('Accessibility scan (axe-core)', 2);
-    const tableRows = [
-        ['URL', 'Critical', 'Serious', 'Moderate', 'Minor', 'Status'],
-    ];
-    for (const { url, results: res, error } of results) {
-        if (error || !res) {
-            tableRows.push([url, '—', '—', '—', '—', `⚠️ scan failed: ${error}`]);
-            failedUrls++;
-            continue;
-        }
-        const counts = { minor: 0, moderate: 0, serious: 0, critical: 0 };
-        let urlFails = false;
-        for (const violation of res.violations) {
-            const nodes = violation.nodes.length;
-            counts[(violation.impact ?? 'minor')] += nodes;
-            totalViolations += nodes;
-            if (impactRank(violation.impact) >= failThreshold) {
-                urlFails = true;
-            }
-        }
-        if (urlFails) {
-            failedUrls++;
-        }
-        tableRows.push([
-            url,
-            String(counts.critical),
-            String(counts.serious),
-            String(counts.moderate),
-            String(counts.minor),
-            urlFails ? '❌ fail' : '✅ pass',
-        ]);
-    }
-    core.summary.addTable(tableRows.map((row, i) => row.map((data) => ({ data, header: i === 0 }))));
-    // Per-violation detail, grouped by URL, worst impact first.
-    for (const { url, results: res } of results) {
-        if (!res || res.violations.length === 0) {
-            continue;
-        }
-        core.summary.addHeading(url, 3);
-        const sorted = [...res.violations].sort((a, b) => impactRank(b.impact) - impactRank(a.impact));
-        for (const v of sorted) {
-            // Help text can contain literal markup like "<html> element" — escape it.
-            const help = v.help.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            core.summary.addRaw(`- **${v.impact ?? 'minor'}** \`${v.id}\` — ${help} ` +
-                `(${v.nodes.length} element${v.nodes.length === 1 ? '' : 's'}) ` +
-                `[docs](${v.helpUrl})`, true);
-        }
-    }
-    if (showPersonas) {
-        writePersonaSection(results);
-    }
+    const options = { failOn, showPersonas };
+    const report = (0, axe_a11y_report_1.buildReport)(results, options);
+    core.summary.addRaw(report.markdown, true);
     await core.summary.write();
-    return { totalViolations, failedUrls };
-}
-/**
- * Aggregate violations by rule across every URL, then render one card per real
- * persona: who they are, what they need, and which of *this run's* violated
- * rules actually touch that need — or an honest note when none do, since a
- * persona with no matched rule is a coverage gap, not a clean bill of health.
- */
-function writePersonaSection(results) {
-    const nodesByRule = new Map();
-    for (const { results: res } of results) {
-        for (const violation of res?.violations ?? []) {
-            nodesByRule.set(violation.id, (nodesByRule.get(violation.id) ?? 0) + violation.nodes.length);
-        }
-    }
-    core.summary.addHeading('Personas: who these findings affect', 2);
-    core.summary.addRaw('Real people from the GOV.UK / GDS accessibility persona set, not just disability labels.', true);
-    for (const persona of personas_1.personas) {
-        const matchedRuleIds = Object.entries(personas_1.ruleToPersonaKeys)
-            .filter(([, keys]) => keys.includes(persona.key))
-            .map(([ruleId]) => ruleId)
-            .filter((ruleId) => nodesByRule.has(ruleId));
-        core.summary.addHeading(`${persona.userType} — ${persona.name}`, 3);
-        core.summary.addRaw(`- ${persona.identity}`, true);
-        core.summary.addRaw(`- Needs: ${persona.needs}`, true);
-        if (matchedRuleIds.length > 0) {
-            const ruleList = matchedRuleIds
-                .map((ruleId) => `\`${ruleId}\` (${nodesByRule.get(ruleId)})`)
-                .join(', ');
-            core.summary.addRaw(`- Found in this scan: ${ruleList}`, true);
-        }
-        else {
-            core.summary.addRaw("- Found in this scan: none of the rules that map to this persona's primary needs. " +
-                'Automation coverage here is limited — prioritize manual testing.', true);
-        }
-    }
+    return { totalViolations: report.totalViolations, failedUrls: report.failedUrls };
 }
 
 
@@ -27856,6 +27654,270 @@ function parseParams (str) {
 }
 
 module.exports = parseParams
+
+
+/***/ }),
+
+/***/ 5671:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.ruleToPersonaKeys = exports.personasForRule = exports.personaByKey = exports.personas = exports.IMPACT_ORDER = exports.normalizeResults = exports.buildReport = void 0;
+var report_1 = __nccwpck_require__(4257);
+Object.defineProperty(exports, "buildReport", ({ enumerable: true, get: function () { return report_1.buildReport; } }));
+Object.defineProperty(exports, "normalizeResults", ({ enumerable: true, get: function () { return report_1.normalizeResults; } }));
+Object.defineProperty(exports, "IMPACT_ORDER", ({ enumerable: true, get: function () { return report_1.IMPACT_ORDER; } }));
+var personas_1 = __nccwpck_require__(3858);
+Object.defineProperty(exports, "personas", ({ enumerable: true, get: function () { return personas_1.personas; } }));
+Object.defineProperty(exports, "personaByKey", ({ enumerable: true, get: function () { return personas_1.personaByKey; } }));
+Object.defineProperty(exports, "personasForRule", ({ enumerable: true, get: function () { return personas_1.personasForRule; } }));
+Object.defineProperty(exports, "ruleToPersonaKeys", ({ enumerable: true, get: function () { return personas_1.ruleToPersonaKeys; } }));
+
+
+/***/ }),
+
+/***/ 3858:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.ruleToPersonaKeys = exports.personaByKey = exports.personas = void 0;
+exports.personasForRule = personasForRule;
+exports.personas = [
+    {
+        key: 'ashleigh',
+        name: 'Ashleigh',
+        userType: 'Blind & Screen Reader Users',
+        identity: 'Partially sighted, uses JAWS and other screen reader features',
+        needs: 'Clear semantic structure, labelled controls, and full keyboard access',
+    },
+    {
+        key: 'claudia',
+        name: 'Claudia',
+        userType: 'Low-Vision & Magnification Users',
+        identity: 'Partially sighted (glaucoma, diabetes), uses ZoomText and a large monitor',
+        needs: 'Strong contrast, predictable layout, content that reflows under magnification',
+    },
+    {
+        key: 'christopher',
+        name: 'Christopher',
+        userType: 'Motor & Dexterity Users',
+        identity: 'Has rheumatoid arthritis, prefers keyboard access, exploring speech recognition',
+        needs: 'Full keyboard operability, generous touch targets, no drag-and-drop-only controls',
+    },
+    {
+        key: 'pawel',
+        name: 'Pawel',
+        userType: 'Autistic & Cognitive-Load-Sensitive Users',
+        identity: 'Autistic, experiences anxiety, prefers simpler and less cluttered interfaces',
+        needs: 'Predictable layouts, plain language, minimal motion and distraction',
+    },
+    {
+        key: 'ron',
+        name: 'Ron',
+        userType: 'Older Users',
+        identity: 'Older user with arthritis, cataracts, and hearing loss',
+        needs: 'Large text, high contrast, and simple, uncluttered forms',
+    },
+    {
+        key: 'saleem',
+        name: 'Saleem',
+        userType: 'Deaf & Hard-of-Hearing Users',
+        identity: 'Profoundly deaf, BSL is his first language',
+        needs: 'Accurate captions and transcripts, and non-audio contact routes',
+    },
+    {
+        key: 'simone',
+        name: 'Simone',
+        userType: 'Dyslexic Users',
+        identity: 'Dyslexic, benefits from plain language and strong structure',
+        needs: 'Clear headings, readable typography, and uncomplicated forms',
+    },
+];
+exports.personaByKey = new Map(exports.personas.map((persona) => [persona.key, persona]));
+/** axe-core rule ID -> persona keys most likely affected. */
+exports.ruleToPersonaKeys = {
+    label: ['ashleigh', 'christopher', 'claudia', 'ron', 'simone'],
+    'button-name': ['ashleigh', 'christopher', 'claudia', 'ron', 'simone'],
+    'link-name': ['ashleigh', 'christopher', 'claudia', 'ron', 'simone'],
+    'image-alt': ['ashleigh', 'ron', 'simone'],
+    'color-contrast': ['claudia', 'ron', 'simone'],
+    'aria-hidden-focus': ['ashleigh', 'christopher', 'claudia', 'ron'],
+    bypass: ['ashleigh', 'christopher', 'claudia', 'ron'],
+    region: ['ashleigh', 'christopher', 'claudia', 'ron'],
+    list: ['ashleigh', 'ron', 'simone', 'saleem'],
+    listitem: ['ashleigh', 'ron', 'simone', 'saleem'],
+    'heading-order': ['ashleigh', 'claudia', 'ron', 'simone'],
+    'target-size': ['christopher', 'ron', 'claudia'],
+    'meta-viewport': ['claudia', 'ron'],
+    'document-title': ['ashleigh', 'claudia', 'ron', 'simone', 'saleem'],
+    'duplicate-id-active': ['ashleigh', 'christopher', 'claudia', 'ron'],
+    tabindex: ['ashleigh', 'christopher', 'claudia', 'ron'],
+    'nested-interactive': ['ashleigh', 'christopher', 'claudia', 'ron'],
+    'html-has-lang': ['ashleigh', 'saleem', 'simone', 'ron', 'pawel'],
+    'valid-lang': ['ashleigh', 'saleem', 'simone', 'ron', 'pawel'],
+    'video-caption': ['saleem', 'pawel', 'simone'],
+    'audio-caption': ['saleem'],
+    blink: ['pawel', 'simone'],
+    'meta-refresh-no-exceptions': ['ashleigh', 'christopher', 'ron', 'pawel', 'simone'],
+};
+function personasForRule(ruleId) {
+    return (exports.ruleToPersonaKeys[ruleId] ?? [])
+        .map((key) => exports.personaByKey.get(key))
+        .filter((persona) => Boolean(persona));
+}
+
+
+/***/ }),
+
+/***/ 4257:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.IMPACT_ORDER = void 0;
+exports.normalizeResults = normalizeResults;
+exports.buildReport = buildReport;
+const personas_1 = __nccwpck_require__(3858);
+exports.IMPACT_ORDER = ['minor', 'moderate', 'serious', 'critical'];
+function impactRank(impact) {
+    return exports.IMPACT_ORDER.indexOf((impact ?? 'minor'));
+}
+function escapeMd(text) {
+    return text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+/**
+ * Accept either axe-scan-action output ({ url, results?, error? } entries)
+ * or a raw array of axe result objects (e.g. from `@axe-core/cli --save`,
+ * where each entry is the results object itself with a `url` property).
+ */
+function normalizeResults(parsed) {
+    if (!Array.isArray(parsed)) {
+        throw new Error('Results file must contain a JSON array.');
+    }
+    return parsed.map((entry, i) => {
+        if (entry && typeof entry === 'object' && 'violations' in entry) {
+            const res = entry;
+            return { url: res.url || `result ${i + 1}`, results: res };
+        }
+        if (entry && typeof entry === 'object' && 'url' in entry) {
+            return entry;
+        }
+        throw new Error(`Unrecognized results entry at index ${i}.`);
+    });
+}
+/**
+ * Build a human-friendly Markdown accessibility report from axe-core results:
+ * a per-URL violation table plus per-rule detail, optionally followed by a
+ * persona section. Framework-agnostic — write the returned markdown wherever
+ * you like (a file, $GITHUB_STEP_SUMMARY, a PR comment, stdout).
+ */
+function buildReport(results, options = {}) {
+    const { failOn = 'serious', showPersonas = false } = options;
+    const failThreshold = failOn === 'none' ? Infinity : impactRank(failOn);
+    let totalViolations = 0;
+    let failedUrls = 0;
+    const lines = ['## Accessibility scan (axe-core)', ''];
+    const tableRows = [['URL', 'Critical', 'Serious', 'Moderate', 'Minor', 'Status']];
+    for (const { url, results: res, error } of results) {
+        if (error || !res) {
+            tableRows.push([url, '—', '—', '—', '—', `⚠️ scan failed: ${error}`]);
+            failedUrls++;
+            continue;
+        }
+        const counts = { minor: 0, moderate: 0, serious: 0, critical: 0 };
+        let urlFails = false;
+        for (const violation of res.violations) {
+            const nodes = violation.nodes.length;
+            counts[(violation.impact ?? 'minor')] += nodes;
+            totalViolations += nodes;
+            if (impactRank(violation.impact) >= failThreshold) {
+                urlFails = true;
+            }
+        }
+        if (urlFails) {
+            failedUrls++;
+        }
+        tableRows.push([
+            url,
+            String(counts.critical),
+            String(counts.serious),
+            String(counts.moderate),
+            String(counts.minor),
+            urlFails ? '❌ fail' : '✅ pass',
+        ]);
+    }
+    lines.push(`| ${tableRows[0].join(' | ')} |`);
+    lines.push(`| ${tableRows[0].map(() => '---').join(' | ')} |`);
+    for (const row of tableRows.slice(1)) {
+        lines.push(`| ${row.join(' | ')} |`);
+    }
+    lines.push('');
+    // Per-violation detail, grouped by URL, worst impact first.
+    for (const { url, results: res } of results) {
+        if (!res || res.violations.length === 0) {
+            continue;
+        }
+        lines.push(`### ${url}`, '');
+        const sorted = [...res.violations].sort((a, b) => impactRank(b.impact) - impactRank(a.impact));
+        for (const v of sorted) {
+            const help = escapeMd(v.help);
+            lines.push(`- **${v.impact ?? 'minor'}** \`${v.id}\` — ${help} ` +
+                `(${v.nodes.length} element${v.nodes.length === 1 ? '' : 's'}) ` +
+                `[docs](${v.helpUrl})`);
+        }
+        lines.push('');
+    }
+    if (showPersonas) {
+        lines.push(...buildPersonaSection(results));
+    }
+    return { markdown: lines.join('\n').trimEnd() + '\n', totalViolations, failedUrls };
+}
+/**
+ * Aggregate violations by rule across every URL, then render one card per real
+ * persona: who they are, what they need, and which of *this run's* violated
+ * rules actually touch that need — or an honest note when none do, since a
+ * persona with no matched rule is a coverage gap, not a clean bill of health.
+ */
+function buildPersonaSection(results) {
+    const nodesByRule = new Map();
+    for (const { results: res } of results) {
+        for (const violation of res?.violations ?? []) {
+            nodesByRule.set(violation.id, (nodesByRule.get(violation.id) ?? 0) + violation.nodes.length);
+        }
+    }
+    const lines = [
+        '## Personas: who these findings affect',
+        '',
+        'Real people from the GOV.UK / GDS accessibility persona set, not just disability labels.',
+        '',
+    ];
+    for (const persona of personas_1.personas) {
+        const matchedRuleIds = Object.entries(personas_1.ruleToPersonaKeys)
+            .filter(([, keys]) => keys.includes(persona.key))
+            .map(([ruleId]) => ruleId)
+            .filter((ruleId) => nodesByRule.has(ruleId));
+        lines.push(`### ${persona.userType} — ${persona.name}`, '');
+        lines.push(`- ${persona.identity}`);
+        lines.push(`- Needs: ${persona.needs}`);
+        if (matchedRuleIds.length > 0) {
+            const ruleList = matchedRuleIds
+                .map((ruleId) => `\`${ruleId}\` (${nodesByRule.get(ruleId)})`)
+                .join(', ');
+            lines.push(`- Found in this scan: ${ruleList}`);
+        }
+        else {
+            lines.push("- Found in this scan: none of the rules that map to this persona's primary needs. " +
+                'Automation coverage here is limited — prioritize manual testing.');
+        }
+        lines.push('');
+    }
+    return lines;
+}
 
 
 /***/ })

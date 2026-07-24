@@ -2,6 +2,20 @@
 
 Notable changes to this action. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.4] — 2026-07-24
+
+### Changed
+
+- Report generation now delegates to [@pattonwebz/axe-a11y-report](https://github.com/pattonwebz/axe-a11y-report)
+  v1.0.0 — a new, framework-agnostic package with the same `buildReport()` logic this action
+  used to own directly, minus any GitHub Actions coupling. This action is now a thin wrapper:
+  it calls that package and writes the returned Markdown to the job summary. No input, output,
+  or behavior changes for existing users — `total-violations`, `failed-urls`, and `show-personas`
+  all work exactly as before, verified against the same fixture numbers.
+- `src/personas.ts` removed — the persona registry now lives in `@pattonwebz/axe-a11y-report`,
+  so it isn't duplicated between this action and anything else that wants the same report
+  outside of a GitHub Actions job summary.
+
 ## [0.0.3] — 2026-07-24
 
 ### Added
