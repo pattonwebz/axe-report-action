@@ -13,6 +13,10 @@ inputs:
     description: 'Minimum violation impact that fails the job: critical, serious, moderate, minor, or none to always pass.'
     required: false
     default: 'serious'
+  show-personas:
+    description: 'Set to true to add a "Personas: who these findings affect" section to the job summary, mapping each violated rule to the real people it affects from the GOV.UK / GDS accessibility persona set (Ashleigh, Claudia, Christopher, Pawel, Ron, Saleem, Simone) instead of leaving findings as an abstract disability category. Default false.'
+    required: false
+    default: 'false'
 
 outputs:
   total-violations:

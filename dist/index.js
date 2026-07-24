@@ -25693,8 +25693,9 @@ async function run() {
             core.setFailed(`Invalid fail-on value "${failOn}". Use one of: ${report_1.IMPACT_ORDER.join(', ')}, none.`);
             return;
         }
+        const showPersonas = core.getInput('show-personas') === 'true';
         const results = (0, report_1.normalizeResults)(JSON.parse(fs.readFileSync(resultsFile, 'utf8')));
-        const summary = await (0, report_1.writeReport)(results, failOn);
+        const summary = await (0, report_1.writeReport)(results, failOn, showPersonas);
         core.setOutput('total-violations', summary.totalViolations);
         core.setOutput('failed-urls', summary.failedUrls);
         if (failOn !== 'none' && summary.failedUrls > 0) {
@@ -25710,6 +25711,101 @@ async function run() {
     }
 }
 run();
+
+
+/***/ }),
+
+/***/ 1746:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.ruleToPersonaKeys = exports.personaByKey = exports.personas = void 0;
+exports.personasForRule = personasForRule;
+exports.personas = [
+    {
+        key: 'ashleigh',
+        name: 'Ashleigh',
+        userType: 'Blind & Screen Reader Users',
+        identity: 'Partially sighted, uses JAWS and other screen reader features',
+        needs: 'Clear semantic structure, labelled controls, and full keyboard access',
+    },
+    {
+        key: 'claudia',
+        name: 'Claudia',
+        userType: 'Low-Vision & Magnification Users',
+        identity: 'Partially sighted (glaucoma, diabetes), uses ZoomText and a large monitor',
+        needs: 'Strong contrast, predictable layout, content that reflows under magnification',
+    },
+    {
+        key: 'christopher',
+        name: 'Christopher',
+        userType: 'Motor & Dexterity Users',
+        identity: 'Has rheumatoid arthritis, prefers keyboard access, exploring speech recognition',
+        needs: 'Full keyboard operability, generous touch targets, no drag-and-drop-only controls',
+    },
+    {
+        key: 'pawel',
+        name: 'Pawel',
+        userType: 'Autistic & Cognitive-Load-Sensitive Users',
+        identity: 'Autistic, experiences anxiety, prefers simpler and less cluttered interfaces',
+        needs: 'Predictable layouts, plain language, minimal motion and distraction',
+    },
+    {
+        key: 'ron',
+        name: 'Ron',
+        userType: 'Older Users',
+        identity: 'Older user with arthritis, cataracts, and hearing loss',
+        needs: 'Large text, high contrast, and simple, uncluttered forms',
+    },
+    {
+        key: 'saleem',
+        name: 'Saleem',
+        userType: 'Deaf & Hard-of-Hearing Users',
+        identity: 'Profoundly deaf, BSL is his first language',
+        needs: 'Accurate captions and transcripts, and non-audio contact routes',
+    },
+    {
+        key: 'simone',
+        name: 'Simone',
+        userType: 'Dyslexic Users',
+        identity: 'Dyslexic, benefits from plain language and strong structure',
+        needs: 'Clear headings, readable typography, and uncomplicated forms',
+    },
+];
+exports.personaByKey = new Map(exports.personas.map((persona) => [persona.key, persona]));
+/** axe-core rule ID -> persona keys most likely affected. */
+exports.ruleToPersonaKeys = {
+    label: ['ashleigh', 'christopher', 'claudia', 'ron', 'simone'],
+    'button-name': ['ashleigh', 'christopher', 'claudia', 'ron', 'simone'],
+    'link-name': ['ashleigh', 'christopher', 'claudia', 'ron', 'simone'],
+    'image-alt': ['ashleigh', 'ron', 'simone'],
+    'color-contrast': ['claudia', 'ron', 'simone'],
+    'aria-hidden-focus': ['ashleigh', 'christopher', 'claudia', 'ron'],
+    bypass: ['ashleigh', 'christopher', 'claudia', 'ron'],
+    region: ['ashleigh', 'christopher', 'claudia', 'ron'],
+    list: ['ashleigh', 'ron', 'simone', 'saleem'],
+    listitem: ['ashleigh', 'ron', 'simone', 'saleem'],
+    'heading-order': ['ashleigh', 'claudia', 'ron', 'simone'],
+    'target-size': ['christopher', 'ron', 'claudia'],
+    'meta-viewport': ['claudia', 'ron'],
+    'document-title': ['ashleigh', 'claudia', 'ron', 'simone', 'saleem'],
+    'duplicate-id-active': ['ashleigh', 'christopher', 'claudia', 'ron'],
+    tabindex: ['ashleigh', 'christopher', 'claudia', 'ron'],
+    'nested-interactive': ['ashleigh', 'christopher', 'claudia', 'ron'],
+    'html-has-lang': ['ashleigh', 'saleem', 'simone', 'ron', 'pawel'],
+    'valid-lang': ['ashleigh', 'saleem', 'simone', 'ron', 'pawel'],
+    'video-caption': ['saleem', 'pawel', 'simone'],
+    'audio-caption': ['saleem'],
+    blink: ['pawel', 'simone'],
+    'meta-refresh-no-exceptions': ['ashleigh', 'christopher', 'ron', 'pawel', 'simone'],
+};
+function personasForRule(ruleId) {
+    return (exports.ruleToPersonaKeys[ruleId] ?? [])
+        .map((key) => exports.personaByKey.get(key))
+        .filter((persona) => Boolean(persona));
+}
 
 
 /***/ }),
@@ -25757,6 +25853,7 @@ exports.IMPACT_ORDER = void 0;
 exports.normalizeResults = normalizeResults;
 exports.writeReport = writeReport;
 const core = __importStar(__nccwpck_require__(7484));
+const personas_1 = __nccwpck_require__(1746);
 exports.IMPACT_ORDER = ['minor', 'moderate', 'serious', 'critical'];
 function impactRank(impact) {
     return exports.IMPACT_ORDER.indexOf((impact ?? 'minor'));
@@ -25785,7 +25882,7 @@ function normalizeResults(parsed) {
  * Write a human-friendly markdown report to the GitHub job summary and
  * return the numbers main() needs for outputs and pass/fail.
  */
-async function writeReport(results, failOn) {
+async function writeReport(results, failOn, showPersonas = false) {
     const failThreshold = failOn === 'none' ? Infinity : impactRank(failOn);
     let totalViolations = 0;
     let failedUrls = 0;
@@ -25837,8 +25934,46 @@ async function writeReport(results, failOn) {
                 `[docs](${v.helpUrl})`, true);
         }
     }
+    if (showPersonas) {
+        writePersonaSection(results);
+    }
     await core.summary.write();
     return { totalViolations, failedUrls };
+}
+/**
+ * Aggregate violations by rule across every URL, then render one card per real
+ * persona: who they are, what they need, and which of *this run's* violated
+ * rules actually touch that need — or an honest note when none do, since a
+ * persona with no matched rule is a coverage gap, not a clean bill of health.
+ */
+function writePersonaSection(results) {
+    const nodesByRule = new Map();
+    for (const { results: res } of results) {
+        for (const violation of res?.violations ?? []) {
+            nodesByRule.set(violation.id, (nodesByRule.get(violation.id) ?? 0) + violation.nodes.length);
+        }
+    }
+    core.summary.addHeading('Personas: who these findings affect', 2);
+    core.summary.addRaw('Real people from the GOV.UK / GDS accessibility persona set, not just disability labels.', true);
+    for (const persona of personas_1.personas) {
+        const matchedRuleIds = Object.entries(personas_1.ruleToPersonaKeys)
+            .filter(([, keys]) => keys.includes(persona.key))
+            .map(([ruleId]) => ruleId)
+            .filter((ruleId) => nodesByRule.has(ruleId));
+        core.summary.addHeading(`${persona.userType} — ${persona.name}`, 3);
+        core.summary.addRaw(`- ${persona.identity}`, true);
+        core.summary.addRaw(`- Needs: ${persona.needs}`, true);
+        if (matchedRuleIds.length > 0) {
+            const ruleList = matchedRuleIds
+                .map((ruleId) => `\`${ruleId}\` (${nodesByRule.get(ruleId)})`)
+                .join(', ');
+            core.summary.addRaw(`- Found in this scan: ${ruleList}`, true);
+        }
+        else {
+            core.summary.addRaw("- Found in this scan: none of the rules that map to this persona's primary needs. " +
+                'Automation coverage here is limited — prioritize manual testing.', true);
+        }
+    }
 }
 
 

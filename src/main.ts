@@ -11,8 +11,10 @@ async function run(): Promise<void> {
 			return;
 		}
 
+		const showPersonas = core.getInput( 'show-personas' ) === 'true';
+
 		const results = normalizeResults( JSON.parse( fs.readFileSync( resultsFile, 'utf8' ) ) );
-		const summary = await writeReport( results, failOn );
+		const summary = await writeReport( results, failOn, showPersonas );
 
 		core.setOutput( 'total-violations', summary.totalViolations );
 		core.setOutput( 'failed-urls', summary.failedUrls );

@@ -1,5 +1,6 @@
 import * as core from '@actions/core';
 import type { AxeResults } from 'axe-core';
+import { personas, ruleToPersonaKeys } from './personas';
 
 export const IMPACT_ORDER = [ 'minor', 'moderate', 'serious', 'critical' ] as const;
 export type Impact = ( typeof IMPACT_ORDER )[ number ];
@@ -44,7 +45,11 @@ export function normalizeResults( parsed: unknown ): UrlResult[] {
  * Write a human-friendly markdown report to the GitHub job summary and
  * return the numbers main() needs for outputs and pass/fail.
  */
-export async function writeReport( results: UrlResult[], failOn: string ): Promise<Summary> {
+export async function writeReport(
+	results: UrlResult[],
+	failOn: string,
+	showPersonas = false
+): Promise<Summary> {
 	const failThreshold = failOn === 'none' ? Infinity : impactRank( failOn );
 	let totalViolations = 0;
 	let failedUrls = 0;
@@ -111,7 +116,55 @@ export async function writeReport( results: UrlResult[], failOn: string ): Promi
 		}
 	}
 
+	if ( showPersonas ) {
+		writePersonaSection( results );
+	}
+
 	await core.summary.write();
 
 	return { totalViolations, failedUrls };
+}
+
+/**
+ * Aggregate violations by rule across every URL, then render one card per real
+ * persona: who they are, what they need, and which of *this run's* violated
+ * rules actually touch that need — or an honest note when none do, since a
+ * persona with no matched rule is a coverage gap, not a clean bill of health.
+ */
+function writePersonaSection( results: UrlResult[] ): void {
+	const nodesByRule = new Map<string, number>();
+	for ( const { results: res } of results ) {
+		for ( const violation of res?.violations ?? [] ) {
+			nodesByRule.set( violation.id, ( nodesByRule.get( violation.id ) ?? 0 ) + violation.nodes.length );
+		}
+	}
+
+	core.summary.addHeading( 'Personas: who these findings affect', 2 );
+	core.summary.addRaw(
+		'Real people from the GOV.UK / GDS accessibility persona set, not just disability labels.',
+		true
+	);
+
+	for ( const persona of personas ) {
+		const matchedRuleIds = Object.entries( ruleToPersonaKeys )
+			.filter( ( [ , keys ] ) => keys.includes( persona.key ) )
+			.map( ( [ ruleId ] ) => ruleId )
+			.filter( ( ruleId ) => nodesByRule.has( ruleId ) );
+
+		core.summary.addHeading( `${ persona.userType } — ${ persona.name }`, 3 );
+		core.summary.addRaw( `- ${ persona.identity }`, true );
+		core.summary.addRaw( `- Needs: ${ persona.needs }`, true );
+		if ( matchedRuleIds.length > 0 ) {
+			const ruleList = matchedRuleIds
+				.map( ( ruleId ) => `\`${ ruleId }\` (${ nodesByRule.get( ruleId ) })` )
+				.join( ', ' );
+			core.summary.addRaw( `- Found in this scan: ${ ruleList }`, true );
+		} else {
+			core.summary.addRaw(
+				"- Found in this scan: none of the rules that map to this persona's primary needs. " +
+					'Automation coverage here is limited — prioritize manual testing.',
+				true
+			);
+		}
+	}
 }

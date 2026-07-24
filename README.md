@@ -19,7 +19,7 @@ It doesn't run any scans itself, so it composes with however you already run axe
 
 - name: Report
   if: always()
-  uses: pattonwebz/axe-report-action@v0.0.2
+  uses: pattonwebz/axe-report-action@v0.0.3
   with:
     results-file: ${{ steps.scan.outputs.results-file }}
     fail-on: serious
@@ -29,7 +29,7 @@ Or from `@axe-core/cli`:
 
 ```yaml
 - run: npx @axe-core/cli https://example.com/ --save axe-results.json
-- uses: pattonwebz/axe-report-action@v0.0.2
+- uses: pattonwebz/axe-report-action@v0.0.3
   with:
     results-file: axe-results.json
 ```
@@ -40,6 +40,7 @@ Or from `@axe-core/cli`:
 |---|---|---|
 | `results-file` | *(required)* | Path to a JSON file of axe-core results — axe-scan-action output or a raw array of axe result objects. |
 | `fail-on` | `serious` | Minimum violation impact that fails the job: `critical`, `serious`, `moderate`, `minor`, or `none` to always pass. |
+| `show-personas` | `false` | Set to `true` to add a "Personas: who these findings affect" section to the job summary — each violated rule mapped to the real people it affects from the GOV.UK / GDS accessibility persona set (Ashleigh, Claudia, Christopher, Pawel, Ron, Saleem, Simone), not just a disability category. A persona with no matched rule in the current run is reported as an automation-coverage gap, not a clean bill of health. |
 
 URLs recorded as unscannable in the results count as failed (a scan you didn't run is not a pass).
 
