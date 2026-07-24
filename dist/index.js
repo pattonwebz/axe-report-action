@@ -27658,13 +27658,1247 @@ module.exports = parseParams
 
 /***/ }),
 
+/***/ 8140:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.GROUP_ORDER = void 0;
+exports.impactKey = impactKey;
+exports.aggregate = aggregate;
+exports.groupForTags = groupForTags;
+const report_1 = __nccwpck_require__(4257);
+/** Normalize a raw impact string to a counting key: unknown/absent → 'none'. */
+function impactKey(impact) {
+    return report_1.IMPACT_ORDER.includes((impact ?? '')) ? impact : 'none';
+}
+/** Group violations by rule id across URLs and total the per-impact counts. */
+function aggregate(results) {
+    const byRule = new Map();
+    const counts = { critical: 0, serious: 0, moderate: 0, minor: 0, none: 0 };
+    let totalViolations = 0;
+    let scannedUrls = 0;
+    let erroredUrls = 0;
+    let engine = '';
+    let timestamp = '';
+    for (const { url, results: res, error } of results) {
+        if (error || !res) {
+            erroredUrls++;
+            continue;
+        }
+        scannedUrls++;
+        if (!engine && res.testEngine?.name) {
+            engine = `${res.testEngine.name} ${res.testEngine.version ?? ''}`.trim();
+        }
+        if (!timestamp && res.timestamp) {
+            timestamp = res.timestamp;
+        }
+        for (const v of res.violations) {
+            counts[impactKey(v.impact)] += v.nodes.length;
+            totalViolations += v.nodes.length;
+            let group = byRule.get(v.id);
+            if (!group) {
+                group = {
+                    id: v.id,
+                    impact: v.impact ?? null,
+                    tags: v.tags ?? [],
+                    description: v.description ?? '',
+                    help: v.help ?? '',
+                    helpUrl: v.helpUrl ?? '',
+                    nodeCount: 0,
+                    perUrl: [],
+                };
+                byRule.set(v.id, group);
+            }
+            group.nodeCount += v.nodes.length;
+            group.perUrl.push({ url, nodes: v.nodes });
+        }
+    }
+    const sorted = [...byRule.values()].sort((a, b) => (0, report_1.impactRank)(b.impact) - (0, report_1.impactRank)(a.impact) || b.nodeCount - a.nodeCount);
+    return { byRule: sorted, counts, totalViolations, scannedUrls, erroredUrls, engine, timestamp };
+}
+exports.GROUP_ORDER = ['WCAG A', 'WCAG AA', 'Best practice', 'Other / custom'];
+/** Bucket a rule by its axe tags: WCAG level A beats AA; best-practice next; everything else is custom. */
+function groupForTags(tags) {
+    if (tags.some((t) => /^wcag2\d*a$/.test(t))) {
+        return 'WCAG A';
+    }
+    if (tags.some((t) => /^wcag2\d*aa$/.test(t))) {
+        return 'WCAG AA';
+    }
+    if (tags.includes('best-practice')) {
+        return 'Best practice';
+    }
+    return 'Other / custom';
+}
+
+
+/***/ }),
+
+/***/ 2234:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.esc = esc;
+exports.safeHref = safeHref;
+exports.highlightHtml = highlightHtml;
+exports.renderReport = renderReport;
+exports.buildHtmlReport = buildHtmlReport;
+const aggregate_1 = __nccwpck_require__(8140);
+const report_1 = __nccwpck_require__(4257);
+const personas_1 = __nccwpck_require__(3858);
+const core_1 = __importDefault(__nccwpck_require__(8053));
+const xml_1 = __importDefault(__nccwpck_require__(2573));
+core_1.default.registerLanguage('xml', xml_1.default);
+/** Escape a value for interpolation into HTML text or attribute context. */
+function esc(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+/** Return an escaped href only for http/https URLs; anything else gets no link. */
+function safeHref(url) {
+    if (!url) {
+        return null;
+    }
+    try {
+        const parsed = new URL(url);
+        if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+            return esc(url);
+        }
+    }
+    catch {
+        // fall through — not a URL at all
+    }
+    return null;
+}
+const IMPACT_LABELS = {
+    critical: 'Critical',
+    serious: 'Serious',
+    moderate: 'Moderate',
+    minor: 'Minor',
+    none: 'No impact',
+};
+function badge(impact) {
+    const key = (0, aggregate_1.impactKey)(impact);
+    return `<span class="badge badge-${key}"><span class="dot" aria-hidden="true"></span>${IMPACT_LABELS[key]}</span>`;
+}
+function plural(n, word) {
+    return `${n} ${word}${n === 1 ? '' : 's'}`;
+}
+/** Persona chips inside a rule section: who this violation affects, by name. */
+function renderPersonas(rule) {
+    const matched = (0, personas_1.personasForRule)(rule.id);
+    if (matched.length === 0) {
+        return '';
+    }
+    const chips = matched.map((p) => `<span class="persona-chip">${esc(p.name)}</span>`);
+    return `<p class="personas"><span class="personas-label">Affects:</span> ${chips.join(' ')}</p>`;
+}
+/**
+ * Build-time HTML syntax highlighting for code snippets via highlight.js
+ * (core + xml grammar only). hljs escapes the source itself; output is
+ * spans with hljs-* classes styled by the report stylesheet.
+ */
+function highlightHtml(src) {
+    try {
+        return core_1.default.highlight(src, { language: 'xml' }).value;
+    }
+    catch {
+        return esc(src);
+    }
+}
+function nodeList(nodes) {
+    // When every element failed the same way, say it once after the list
+    // instead of repeating the identical fix advice per element.
+    const summaries = new Set(nodes.map((n) => n.failureSummary ?? ''));
+    const shared = summaries.size === 1 ? [...summaries][0] : null;
+    const items = nodes.map((node) => {
+        const target = Array.isArray(node.target) ? node.target.map((t) => String(t)).join(' ') : '';
+        const snippet = (node.html ?? '').length > 300 ? `${node.html.slice(0, 300)}…` : node.html ?? '';
+        return `<li>
+			${target ? `<code class="target">${esc(target)}</code>` : ''}
+			${snippet ? `<code class="snippet">${highlightHtml(snippet)}</code>` : ''}
+			${shared === null && node.failureSummary ? `<pre class="failure">${esc(node.failureSummary)}</pre>` : ''}
+		</li>`;
+    });
+    const sharedBlock = shared ? `<pre class="failure">${esc(shared)}</pre>` : '';
+    return `<ul class="nodes">${items.join('')}</ul>${sharedBlock}`;
+}
+function ruleDocsLink(rule) {
+    const href = safeHref(rule.helpUrl);
+    if (href) {
+        return `<a href="${href}" rel="noopener">Documentation for ${esc(rule.id)}</a>`;
+    }
+    return rule.helpUrl ? `<span class="muted">${esc(rule.helpUrl)}</span>` : '';
+}
+/** Lowercased haystack the client-side search matches against. */
+function searchText(...parts) {
+    return esc(parts.filter(Boolean).join(' ').toLowerCase());
+}
+let accordionSeq = 0;
+/**
+ * ARIA APG accordion: a heading wrapping a toggle button with
+ * aria-expanded/aria-controls, pointing at a labelled region.
+ */
+function accordion(rule, headingLevel, summaryHtml, bodyHtml) {
+    const id = `acc-${++accordionSeq}`;
+    return `<div class="rule" data-rule-id="${esc(rule.id)}" data-search="${searchText(rule.id, rule.help, rule.description)}" data-impacts="${(0, aggregate_1.impactKey)(rule.impact)}">
+		<h${headingLevel} class="rule-heading">
+			<button type="button" class="rule-toggle" id="${id}-toggle" aria-expanded="false" aria-controls="${id}-body">
+				<span class="disclosure" aria-hidden="true">▸</span>
+				${summaryHtml}
+			</button>
+		</h${headingLevel}>
+		<div class="rule-body" id="${id}-body" role="region" aria-labelledby="${id}-toggle" hidden>
+			${bodyHtml}
+		</div>
+	</div>`;
+}
+function ruleSummary(rule) {
+    return `${badge(rule.impact)} <code>${esc(rule.id)}</code>
+		<span class="rule-help">${esc(rule.help)}</span>
+		<span class="counts">${plural(rule.nodeCount, 'element')} · ${plural(rule.perUrl.length, 'URL')}</span>`;
+}
+/**
+ * Full body for one rule's accordion: description, docs link, affected
+ * personas, and the per-URL/per-element breakdown (target, HTML snippet,
+ * failure summary). Shared by every tab that lists rules in detail — a
+ * rule shouldn't get a thinner writeup just because it's grouped
+ * differently (the "By group" tab was previously missing all of this).
+ */
+function ruleDetailsBody(rule) {
+    const urls = rule.perUrl.map(({ url, nodes }) => `<div class="rule-url">
+			<h4>${esc(url)} <span class="muted">(${plural(nodes.length, 'element')})</span></h4>
+			${nodeList(nodes)}
+		</div>`);
+    return `
+			${rule.description ? `<p>${esc(rule.description)}</p>` : ''}
+			${ruleDocsLink(rule)}
+			${renderPersonas(rule)}
+			${urls.join('')}`;
+}
+function renderRuleDetails(rule) {
+    return accordion(rule, 3, ruleSummary(rule), ruleDetailsBody(rule));
+}
+function renderByRuleTab(agg) {
+    if (agg.byRule.length === 0) {
+        return '<p class="empty">No violations found. 🎉</p>';
+    }
+    return agg.byRule.map((rule) => renderRuleDetails(rule)).join('\n');
+}
+function renderByUrlTab(results) {
+    return results.map(({ url, results: res, error }) => {
+        const href = safeHref(url);
+        const heading = href ? `<a href="${href}" rel="noopener">${esc(url)}</a>` : esc(url);
+        if (error || !res) {
+            return `<section class="url-card" data-search="${searchText(url, error)}">
+				<h3>${heading}</h3>
+				<p class="scan-error">⚠️ Scan failed: ${esc(error ?? 'no results recorded')}</p>
+			</section>`;
+        }
+        const nodeTotal = res.violations.reduce((n, v) => n + v.nodes.length, 0);
+        const passCount = Array.isArray(res.passes) ? res.passes.length : 0;
+        const search = searchText(url, ...res.violations.flatMap((v) => [v.id, v.help, v.description]));
+        const impacts = [...new Set(res.violations.map((v) => (0, aggregate_1.impactKey)(v.impact)))].join(' ');
+        if (res.violations.length === 0) {
+            return `<section class="url-card" data-search="${search}">
+				<h3>${heading}</h3>
+				<p><span class="badge badge-pass"><span class="dot" aria-hidden="true"></span>0 violations</span>
+				<span class="muted">${plural(passCount, 'passed rule')}</span></p>
+			</section>`;
+        }
+        const sorted = [...res.violations].sort((a, b) => (0, report_1.impactRank)(b.impact) - (0, report_1.impactRank)(a.impact));
+        const rows = sorted.map((v) => `<li>${badge(v.impact)} <code>${esc(v.id)}</code>
+			${esc(v.help ?? '')} <span class="muted">(${plural(v.nodes.length, 'element')})</span></li>`);
+        return `<section class="url-card" data-search="${search}" data-impacts="${esc(impacts)}">
+			<h3>${heading}</h3>
+			<p class="muted">${plural(nodeTotal, 'violation')} · ${plural(passCount, 'passed rule')}</p>
+			<ul class="url-violations">${rows.join('')}</ul>
+		</section>`;
+    }).join('\n');
+}
+function renderByGroupTab(agg) {
+    const buckets = new Map();
+    for (const rule of agg.byRule) {
+        const group = (0, aggregate_1.groupForTags)(rule.tags);
+        buckets.set(group, [...(buckets.get(group) ?? []), rule]);
+    }
+    const sections = aggregate_1.GROUP_ORDER.filter((g) => buckets.has(g)).map((g) => {
+        const rules = buckets.get(g);
+        const total = rules.reduce((n, r) => n + r.nodeCount, 0);
+        const items = rules.map((rule) => accordion(rule, 4, ruleSummary(rule), `
+				${ruleDetailsBody(rule)}
+				<p class="muted">Tags: ${esc(rule.tags.join(', '))}</p>`));
+        return `<section>
+			<h3>${esc(g)} <span class="muted">(${plural(rules.length, 'rule')}, ${plural(total, 'element')})</span></h3>
+			${items.join('')}
+		</section>`;
+    });
+    return sections.length > 0 ? sections.join('\n') : '<p class="empty">No violations found. 🎉</p>';
+}
+/** Flat stream of every violation instance (one entry per affected element), most severe first. */
+function renderStreamTab(results) {
+    const entries = [];
+    for (const { url, results: res } of results) {
+        if (!res) {
+            continue;
+        }
+        for (const v of res.violations) {
+            for (const node of v.nodes) {
+                entries.push({ url, id: v.id, impact: v.impact, help: v.help ?? '', description: v.description ?? '', node });
+            }
+        }
+    }
+    entries.sort((a, b) => (0, report_1.impactRank)(b.impact) - (0, report_1.impactRank)(a.impact));
+    if (entries.length === 0) {
+        return '<p class="empty">No violations found. 🎉</p>';
+    }
+    const items = entries.map((e) => {
+        const target = Array.isArray(e.node.target) ? e.node.target.map((t) => String(t)).join(' ') : '';
+        const snippet = (e.node.html ?? '').length > 300 ? `${e.node.html.slice(0, 300)}…` : e.node.html ?? '';
+        return `<article class="stream-item" data-search="${searchText(e.url, e.id, e.help, e.description)}" data-impacts="${(0, aggregate_1.impactKey)(e.impact)}">
+			<h3 class="stream-head">${badge(e.impact)} <code>${esc(e.id)}</code>
+				<span class="rule-help">${esc(e.help)}</span>
+				<span class="stream-url">${esc(e.url)}</span></h3>
+			${target ? `<code class="target">${esc(target)}</code>` : ''}
+			${snippet ? `<code class="snippet">${highlightHtml(snippet)}</code>` : ''}
+			${e.node.failureSummary ? `<pre class="failure">${esc(e.node.failureSummary)}</pre>` : ''}
+		</article>`;
+    });
+    return items.join('\n');
+}
+function groupByPersona(agg) {
+    const byPersona = new Map();
+    for (const rule of agg.byRule) {
+        for (const persona of (0, personas_1.personasForRule)(rule.id)) {
+            byPersona.set(persona.key, [...(byPersona.get(persona.key) ?? []), rule]);
+        }
+    }
+    const unmapped = agg.byRule.filter((rule) => (0, personas_1.personasForRule)(rule.id).length === 0);
+    return { byPersona, unmapped };
+}
+/** Cards view: one card per real GDS persona — who they are, what they need, and the rules whose violations affect them. */
+function renderPersonaCardsView(grouping) {
+    const { byPersona, unmapped } = grouping;
+    const cards = personas_1.personas.map((persona) => {
+        const rules = byPersona.get(persona.key) ?? [];
+        const elementTotal = rules.reduce((n, r) => n + r.nodeCount, 0);
+        const list = rules.length === 0
+            ? "<p class=\"persona-gap\">None of this run's rules map to this persona's primary needs. Automation coverage here is limited — prioritize manual testing.</p>"
+            : `<ul class="persona-rules">${rules.map((r) => `<li>${badge(r.impact)} <code>${esc(r.id)}</code>
+				<span class="muted">(${plural(r.nodeCount, 'element')})</span></li>`).join('')}</ul>`;
+        return `<section class="persona-card">
+			<p class="persona-eyebrow">${esc(persona.userType)}</p>
+			<h3><span class="persona-icon" aria-hidden="true">${esc(persona.icon)}</span> ${esc(persona.name)}</h3>
+			<p class="persona-desc">${esc(persona.identity)}</p>
+			<p class="persona-needs"><span class="persona-needs-label">Needs:</span> ${esc(persona.needs)}</p>
+			<p class="persona-stats">${plural(rules.length, 'rule')} · ${plural(elementTotal, 'affected element')}</p>
+			${list}
+		</section>`;
+    });
+    const unmappedSection = unmapped.length === 0 ? '' : `<section class="persona-card persona-unmapped">
+		<h3><span class="persona-icon" aria-hidden="true">?</span> Not yet mapped</h3>
+		<p class="persona-desc">These rules aren't in the curated GOV.UK / GDS persona map yet — review them manually.</p>
+		<ul class="persona-rules">${unmapped.map((r) => `<li>${badge(r.impact)} <code>${esc(r.id)}</code></li>`).join('')}</ul>
+	</section>`;
+    return `<div class="persona-grid">${cards.join('\n')}${unmappedSection}</div>`;
+}
+/** Table view: one row per real GDS persona — user type, needs, and issues at a glance. Denser than the cards. */
+function renderPersonaTableView(grouping) {
+    const { byPersona, unmapped } = grouping;
+    const rows = personas_1.personas.map((persona) => {
+        const rules = byPersona.get(persona.key) ?? [];
+        const elementTotal = rules.reduce((n, r) => n + r.nodeCount, 0);
+        const issues = rules.length === 0
+            ? '<span class="persona-clear">None this run</span>'
+            : `<ul class="persona-table-issues">${rules.map((r) => `<li>${badge(r.impact)} <code>${esc(r.id)}</code></li>`).join('')}</ul>`;
+        return `<tr>
+			<th scope="row"><span class="persona-icon" aria-hidden="true">${esc(persona.icon)}</span> ${esc(persona.name)}</th>
+			<td>${esc(persona.userType)}</td>
+			<td>${issues}</td>
+			<td>${plural(rules.length, 'rule')} · ${plural(elementTotal, 'element')}</td>
+		</tr>`;
+    });
+    if (unmapped.length > 0) {
+        rows.push(`<tr>
+			<th scope="row"><span class="persona-icon" aria-hidden="true">?</span> Not yet mapped</th>
+			<td>Unmapped</td>
+			<td><ul class="persona-table-issues">${unmapped.map((r) => `<li>${badge(r.impact)} <code>${esc(r.id)}</code></li>`).join('')}</ul></td>
+			<td>${plural(unmapped.length, 'rule')}</td>
+		</tr>`);
+    }
+    return `<div class="persona-table-wrap">
+		<table class="persona-table">
+			<caption class="sr-only">All personas with their user type and issues</caption>
+			<thead><tr><th scope="col">Persona</th><th scope="col">User type</th><th scope="col">Issues</th><th scope="col">Totals</th></tr></thead>
+			<tbody>${rows.join('\n')}</tbody>
+		</table>
+	</div>`;
+}
+/** The Personas page: a Cards view and a denser Table view of the same underlying grouping. */
+function renderPersonasPage(agg) {
+    const grouping = groupByPersona(agg);
+    const views = [
+        { id: 'persona-cards', label: 'Cards', body: renderPersonaCardsView(grouping) },
+        { id: 'persona-table', label: 'Table', body: renderPersonaTableView(grouping) },
+    ];
+    const viewTabs = views.map((v, i) => `<button role="tab" id="tab-${v.id}" aria-controls="panel-${v.id}" aria-selected="${i === 0}" tabindex="${i === 0 ? 0 : -1}">${v.label}</button>`).join('');
+    const viewPanels = views.map((v, i) => `<div role="tabpanel" id="panel-${v.id}" aria-labelledby="tab-${v.id}"${i === 0 ? '' : ' hidden'}>${v.body}</div>`).join('\n');
+    return `<h2 class="page-title">Who is affected</h2>
+	<p class="page-intro">Each violation is mapped to the real people from the GOV.UK / GDS accessibility persona set it's most likely to affect — not just a disability category. These are planning tools, not simulations of disabled people or a substitute for testing with disabled users.</p>
+	<div role="tablist" aria-label="Persona views" class="persona-view-tabs">${viewTabs}</div>
+	${viewPanels}`;
+}
+const STYLE = `
+/* GLASS MAX — maximal glassmorphic aurora dashboard. CSS-only over the stock report markup. */
+:root {
+	--ink: #eef0ff; --ink-2: #c3c8e8; --muted: #8d93bd;
+	--critical: #ff5c7a; --serious: #ff9760; --moderate: #ffd166;
+	--minor: #9aa5d1; --none: #7d86b0; --pass: #4ce0a3;
+	--accent: #8b7cff; --accent-2: #4cc3ff;
+	--glass: rgba(18, 20, 46, 0.72);
+	--glass-strong: rgba(14, 16, 38, 0.86);
+	--glass-border: rgba(255, 255, 255, 0.14);
+	--glass-highlight: rgba(255, 255, 255, 0.28);
+	--page: #0a0b1e;
+	--aur-a: rgba(124, 77, 255, 0.35); --aur-b: rgba(56, 189, 248, 0.28);
+	--aur-c: rgba(255, 92, 122, 0.18); --aur-d: rgba(76, 224, 163, 0.14);
+	--blob-a: rgba(139, 124, 255, 0.22); --blob-b: rgba(76, 195, 255, 0.18); --blob-c: rgba(255, 151, 96, 0.10);
+	--grain-o: .5; --sh: 4, 6, 24;
+	--well: rgba(8, 10, 28, 0.55); --well-2: rgba(5, 7, 22, 0.65); --well-3: rgba(8, 10, 28, 0.35);
+	--well-strong: rgba(5, 7, 22, 0.85);
+	--mix-ink: #ffffff; --h1-a: #ffffff;
+	--hl-tag: #7cc7ff; --hl-attr: #b8a6ff; --hl-value: #7fe0b0; --hl-comment: #7d86b0; --hl-punct: #8d93bd;
+	color-scheme: dark;
+	--radius: 18px;
+}
+:root[data-theme="light"] {
+	--ink: #1c2140; --ink-2: #3d4370; --muted: #5c628f;
+	--critical: #d31f45; --serious: #c2551a; --moderate: #9a6a00;
+	--minor: #56618f; --none: #6d7499; --pass: #0b8f5f;
+	--accent: #5346d6; --accent-2: #0270b8;
+	--glass: rgba(255, 255, 255, 0.62);
+	--glass-strong: rgba(255, 255, 255, 0.82);
+	--glass-border: rgba(35, 42, 95, 0.16);
+	--glass-highlight: rgba(255, 255, 255, 0.95);
+	--page: #e9edf9;
+	--aur-a: rgba(124, 77, 255, 0.18); --aur-b: rgba(56, 189, 248, 0.16);
+	--aur-c: rgba(255, 92, 122, 0.10); --aur-d: rgba(76, 224, 163, 0.10);
+	--blob-a: rgba(139, 124, 255, 0.14); --blob-b: rgba(76, 195, 255, 0.12); --blob-c: rgba(255, 151, 96, 0.07);
+	--grain-o: .28; --sh: 92, 100, 155;
+	--well: rgba(255, 255, 255, 0.72); --well-2: rgba(243, 246, 255, 0.9); --well-3: rgba(234, 238, 252, 0.6);
+	--well-strong: rgba(255, 255, 255, 0.92);
+	--mix-ink: #1c2140; --h1-a: #1c2140;
+	--hl-tag: #0b63b8; --hl-attr: #6a3fd8; --hl-value: #0b7a4b; --hl-comment: #737a9e; --hl-punct: #5c628f;
+	color-scheme: light;
+}
+@media (prefers-color-scheme: light) {
+	:root:not([data-theme="dark"]) {
+	--ink: #1c2140; --ink-2: #3d4370; --muted: #5c628f;
+	--critical: #d31f45; --serious: #c2551a; --moderate: #9a6a00;
+	--minor: #56618f; --none: #6d7499; --pass: #0b8f5f;
+	--accent: #5346d6; --accent-2: #0270b8;
+	--glass: rgba(255, 255, 255, 0.62);
+	--glass-strong: rgba(255, 255, 255, 0.82);
+	--glass-border: rgba(35, 42, 95, 0.16);
+	--glass-highlight: rgba(255, 255, 255, 0.95);
+	--page: #e9edf9;
+	--aur-a: rgba(124, 77, 255, 0.18); --aur-b: rgba(56, 189, 248, 0.16);
+	--aur-c: rgba(255, 92, 122, 0.10); --aur-d: rgba(76, 224, 163, 0.10);
+	--blob-a: rgba(139, 124, 255, 0.14); --blob-b: rgba(76, 195, 255, 0.12); --blob-c: rgba(255, 151, 96, 0.07);
+	--grain-o: .28; --sh: 92, 100, 155;
+	--well: rgba(255, 255, 255, 0.72); --well-2: rgba(243, 246, 255, 0.9); --well-3: rgba(234, 238, 252, 0.6);
+	--well-strong: rgba(255, 255, 255, 0.92);
+	--mix-ink: #1c2140; --h1-a: #1c2140;
+	--hl-tag: #0b63b8; --hl-attr: #6a3fd8; --hl-value: #0b7a4b; --hl-comment: #737a9e; --hl-punct: #5c628f;
+	color-scheme: light;
+	}
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+.sr-only {
+	position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+	overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
+html { scrollbar-color: rgba(139,124,255,.4) transparent; }
+body {
+	margin: 0; color: var(--ink); min-height: 100vh;
+	font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+	-webkit-font-smoothing: antialiased;
+	background: var(--page);
+	background-image:
+		radial-gradient(ellipse 80% 60% at 15% -10%, var(--aur-a), transparent 60%),
+		radial-gradient(ellipse 70% 55% at 90% 5%, var(--aur-b), transparent 60%),
+		radial-gradient(ellipse 65% 50% at 70% 95%, var(--aur-c), transparent 60%),
+		radial-gradient(ellipse 50% 45% at 5% 80%, var(--aur-d), transparent 60%);
+	background-attachment: fixed;
+}
+/* drifting aurora layer + film grain */
+body::before {
+	content: ""; position: fixed; inset: -20%; z-index: -2; pointer-events: none;
+	background:
+		radial-gradient(circle 480px at 30% 30%, var(--blob-a), transparent 70%),
+		radial-gradient(circle 420px at 70% 60%, var(--blob-b), transparent 70%),
+		radial-gradient(circle 380px at 45% 85%, var(--blob-c), transparent 70%);
+	animation: aurora-drift 26s ease-in-out infinite alternate;
+	filter: blur(28px) saturate(1.2);
+}
+body::after {
+	content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; opacity: var(--grain-o);
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+@keyframes aurora-drift {
+	0% { transform: translate3d(-4%, -2%, 0) rotate(0deg) scale(1); }
+	100% { transform: translate3d(4%, 3%, 0) rotate(4deg) scale(1.08); }
+}
+
+main { max-width: 1020px; margin: 0 auto; padding: 48px 22px 90px; }
+
+/* ---- Masthead ---- */
+header.report {
+	position: relative; padding: 26px 30px 22px; margin-bottom: 26px;
+	background: linear-gradient(160deg, rgba(255,255,255,0.10), rgba(255,255,255,0.02) 55%), var(--glass);
+	border: 1px solid var(--glass-border); border-radius: calc(var(--radius) + 4px);
+	backdrop-filter: blur(22px) saturate(1.4); -webkit-backdrop-filter: blur(22px) saturate(1.4);
+	box-shadow: 0 24px 60px rgba(var(--sh), 0.55), inset 0 1px 0 var(--glass-highlight);
+	overflow: hidden;
+}
+header.report::before {
+	content: ""; position: absolute; top: -60%; left: -10%; width: 60%; height: 160%;
+	background: linear-gradient(105deg, transparent 42%, rgba(255,255,255,0.09) 50%, transparent 58%);
+	transform: rotate(8deg); pointer-events: none;
+}
+header.report::after {
+	content: "◈ AXE-CORE INTELLIGENCE"; position: absolute; bottom: 14px; right: 20px;
+	font-size: 10px; font-weight: 700; letter-spacing: .28em; color: var(--muted);
+	border: 1px solid var(--glass-border); border-radius: 999px; padding: 4px 12px;
+	background: rgba(255,255,255,0.04);
+}
+header.report h1 {
+	margin: 0 0 8px; font-size: 34px; font-weight: 750; letter-spacing: -0.03em; line-height: 1.15;
+	background: linear-gradient(92deg, var(--h1-a) 10%, var(--accent-2) 55%, var(--accent) 90%);
+	-webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: transparent;
+	filter: drop-shadow(0 2px 18px rgba(139, 124, 255, 0.35));
+}
+header.report .meta { color: var(--ink-2); font-size: 13px; margin: 0; letter-spacing: .02em; }
+
+
+/* ---- Page nav ---- */
+.page-nav {
+	display: flex; margin-bottom: 20px;
+}
+.page-nav ul {
+	display: inline-flex; gap: 4px; margin: 0; padding: 5px; list-style: none;
+	background: var(--glass); border: 1px solid var(--glass-border); border-radius: 999px;
+	backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+	box-shadow: 0 10px 26px rgba(var(--sh), 0.45), inset 0 1px 0 var(--glass-highlight);
+}
+.page-nav a {
+	display: inline-block; border-radius: 999px; padding: 8px 22px;
+	font-size: 14px; font-weight: 600; color: var(--muted); text-decoration: none;
+	transition: color .15s, background .15s, box-shadow .15s;
+}
+.page-nav a:hover { color: var(--ink); }
+.page-nav a[aria-current="page"] {
+	color: #fff;
+	background: linear-gradient(135deg, rgba(139,124,255,0.85), rgba(76,195,255,0.75));
+	box-shadow: 0 0 22px rgba(139, 124, 255, 0.5), inset 0 1px 0 rgba(255,255,255,0.35);
+	text-shadow: 0 1px 2px rgba(10, 11, 30, 0.4);
+}
+.page-nav a:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+
+/* ---- Personas page ---- */
+.page-title { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; margin: 4px 0 6px; }
+.page-intro { color: var(--ink-2); font-size: 14px; margin: 0 0 22px; max-width: 70ch; }
+.persona-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; align-items: start; }
+.persona-card {
+	background: linear-gradient(165deg, rgba(255,255,255,0.07), rgba(255,255,255,0.01) 55%), var(--glass);
+	border: 1px solid var(--glass-border); border-radius: var(--radius);
+	padding: 18px 20px;
+	backdrop-filter: blur(16px) saturate(1.3); -webkit-backdrop-filter: blur(16px) saturate(1.3);
+	box-shadow: 0 12px 30px rgba(var(--sh), 0.45), inset 0 1px 0 var(--glass-highlight);
+}
+.persona-eyebrow {
+	font-size: 11px; font-weight: 700; color: var(--accent-2); margin: 0 0 6px;
+	text-transform: uppercase; letter-spacing: .08em;
+}
+.persona-card h3 { margin: 0 0 8px; font-size: 16px; font-weight: 650; display: flex; align-items: center; gap: 10px; }
+.persona-icon {
+	display: inline-flex; align-items: center; justify-content: center; flex: none;
+	width: 34px; height: 34px; border-radius: 10px; font-size: 17px;
+	color: var(--accent-2); background: var(--well);
+	border: 1px solid var(--glass-border);
+	text-shadow: 0 0 12px rgba(76, 195, 255, 0.5);
+}
+.persona-desc { color: var(--ink-2); font-size: 13.5px; margin: 0 0 8px; }
+.persona-needs { color: var(--ink-2); font-size: 13.5px; margin: 0 0 10px; }
+.persona-needs-label { font-weight: 700; color: var(--ink); }
+.persona-stats {
+	font-size: 12px; font-weight: 700; color: var(--accent-2); margin: 0 0 10px;
+	text-transform: uppercase; letter-spacing: .08em;
+}
+.persona-clear { color: var(--pass); font-size: 14px; margin: 0; }
+.persona-gap { color: var(--moderate); font-size: 13.5px; margin: 0; }
+ul.persona-rules { margin: 0; padding: 0; list-style: none; }
+ul.persona-rules li {
+	display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+	padding: 6px 10px; margin-bottom: 6px; font-size: 13.5px;
+	background: var(--well-3); border: 1px solid rgba(255,255,255,0.07); border-radius: 10px;
+}
+ul.persona-rules code { font-weight: 700; font-size: 12.5px; color: var(--accent-2); font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+.persona-unmapped .persona-icon { color: var(--moderate); text-shadow: 0 0 12px color-mix(in srgb, var(--moderate) 50%, transparent); }
+
+.persona-view-tabs { margin-bottom: 18px; }
+
+.persona-table-wrap {
+	overflow-x: auto;
+	border: 1px solid var(--glass-border); border-radius: var(--radius);
+	background: var(--glass);
+	backdrop-filter: blur(16px) saturate(1.3); -webkit-backdrop-filter: blur(16px) saturate(1.3);
+	box-shadow: 0 12px 30px rgba(var(--sh), 0.45), inset 0 1px 0 var(--glass-highlight);
+}
+table.persona-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.persona-table th, .persona-table td { padding: 12px 16px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--glass-border); }
+.persona-table thead th { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
+.persona-table tbody tr:last-child th, .persona-table tbody tr:last-child td { border-bottom: none; }
+.persona-table th[scope="row"] { font-weight: 650; white-space: nowrap; display: flex; align-items: center; gap: 10px; }
+.persona-table .persona-icon { width: 26px; height: 26px; font-size: 13px; border-radius: 8px; }
+ul.persona-table-issues { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+ul.persona-table-issues li { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+ul.persona-table-issues code { font-weight: 700; font-size: 12px; color: var(--accent-2); font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+
+/* ---- Persona chips in rule bodies ---- */
+.personas { margin: 10px 0 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.personas-label { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .12em; }
+.persona-chip {
+	display: inline-block; border-radius: 999px; padding: 2px 11px;
+	font-size: 12px; font-weight: 600; color: var(--ink-2);
+	background: var(--well); border: 1px solid var(--glass-border);
+}
+
+/* ---- Theme toggle ---- */
+.theme-toggle {
+	position: absolute; top: 14px; right: 16px; z-index: 5;
+	display: inline-flex; gap: 3px; padding: 4px;
+	background: var(--well); border: 1px solid var(--glass-border); border-radius: 999px;
+	backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+}
+.theme-toggle button {
+	background: none; border: 1px solid transparent; border-radius: 999px;
+	padding: 4px 12px; font: inherit; font-size: 12px; font-weight: 600;
+	color: var(--muted); cursor: pointer; transition: color .15s, background .15s;
+}
+.theme-toggle button:hover { color: var(--ink); }
+.theme-toggle button[aria-pressed="true"] {
+	color: #fff;
+	background: linear-gradient(135deg, rgba(139,124,255,0.85), rgba(76,195,255,0.75));
+	box-shadow: 0 0 14px rgba(139, 124, 255, 0.45), inset 0 1px 0 rgba(255,255,255,0.3);
+	text-shadow: 0 1px 2px rgba(10, 11, 30, 0.4);
+}
+.theme-toggle button:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+header.report { padding-right: 240px; }
+@media (max-width: 760px) {
+	header.report { padding-right: 30px; }
+	.theme-toggle { position: static; margin-bottom: 12px; }
+}
+
+/* ---- KPI tiles ---- */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; margin-bottom: 26px; perspective: 900px; }
+.tile {
+	--glow: var(--none);
+	position: relative; overflow: hidden;
+	background: linear-gradient(165deg, rgba(255,255,255,0.09), rgba(255,255,255,0.015) 60%), var(--glass);
+	border: 1px solid var(--glass-border); border-radius: var(--radius);
+	padding: 16px 16px 14px; cursor: pointer;
+	font: inherit; color: inherit; text-align: left;
+	display: flex; flex-direction: column; gap: 4px;
+	backdrop-filter: blur(18px) saturate(1.35); -webkit-backdrop-filter: blur(18px) saturate(1.35);
+	box-shadow: 0 14px 34px rgba(var(--sh), 0.5), inset 0 1px 0 var(--glass-highlight);
+	transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+}
+.tile::before { /* colored orb glow */
+	content: ""; position: absolute; top: -34px; right: -30px; width: 110px; height: 110px;
+	border-radius: 50%; background: radial-gradient(circle, var(--glow), transparent 70%);
+	opacity: .5; transition: opacity .18s, transform .18s;
+}
+.tile::after { /* bottom energy bar */
+	content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px;
+	background: linear-gradient(90deg, var(--glow), transparent 85%); opacity: .85;
+}
+.tile:hover { transform: translateY(-4px) rotateX(2deg); border-color: rgba(255,255,255,0.26); box-shadow: 0 24px 50px rgba(var(--sh), 0.6), inset 0 1px 0 var(--glass-highlight); }
+.tile:hover::before { opacity: .85; transform: scale(1.15); }
+.tile:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 3px; }
+.tile .label { font-size: 11px; font-weight: 700; color: var(--ink-2); text-transform: uppercase; letter-spacing: .16em; display: flex; align-items: center; gap: 7px; }
+.tile .label::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--glow); box-shadow: 0 0 10px var(--glow), 0 0 22px var(--glow); flex: none; }
+.tile .value {
+	font-size: 38px; font-weight: 800; letter-spacing: -0.03em; line-height: 1.05;
+	font-variant-numeric: tabular-nums;
+	text-shadow: 0 0 26px color-mix(in srgb, var(--glow) 55%, transparent);
+}
+.tile-critical { --glow: var(--critical); }
+.tile-serious { --glow: var(--serious); }
+.tile-moderate { --glow: var(--moderate); }
+.tile-minor { --glow: var(--minor); }
+.tile-none { --glow: var(--none); }
+.tile[aria-pressed="true"] {
+	border-color: color-mix(in srgb, var(--glow) 70%, white 10%);
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--glow) 65%, transparent),
+		0 0 30px color-mix(in srgb, var(--glow) 40%, transparent),
+		0 14px 34px rgba(var(--sh), 0.55), inset 0 1px 0 var(--glass-highlight);
+	background: linear-gradient(165deg, color-mix(in srgb, var(--glow) 16%, transparent), rgba(255,255,255,0.02) 60%), var(--glass-strong);
+}
+.tile[aria-pressed="true"]::before { opacity: 1; }
+.tile[aria-pressed="true"] .label::after {
+	content: "ACTIVE"; position: absolute; bottom: 10px; right: 12px;
+	font-size: 9px; letter-spacing: .2em;
+	color: color-mix(in srgb, var(--glow) 45%, var(--mix-ink) 55%);
+	background: var(--well-strong);
+	border: 1px solid color-mix(in srgb, var(--glow) 55%, transparent);
+	border-radius: 999px; padding: 2px 8px;
+	box-shadow: 0 0 10px color-mix(in srgb, var(--glow) 30%, transparent);
+}
+
+/* ---- Search ---- */
+.search {
+	display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 14px;
+	padding: 12px 16px;
+	background: var(--glass); border: 1px solid var(--glass-border); border-radius: var(--radius);
+	backdrop-filter: blur(18px) saturate(1.3); -webkit-backdrop-filter: blur(18px) saturate(1.3);
+	box-shadow: 0 10px 28px rgba(var(--sh), 0.45), inset 0 1px 0 var(--glass-highlight);
+}
+.search label { font-size: 11px; font-weight: 700; color: var(--ink-2); text-transform: uppercase; letter-spacing: .18em; }
+.search label::before { content: "⌕ "; color: var(--accent-2); font-size: 14px; letter-spacing: 0; }
+.search input {
+	flex: 1 1 300px; max-width: 480px; padding: 9px 14px; font: inherit; font-size: 14px;
+	color: var(--ink); background: var(--well);
+	border: 1px solid var(--glass-border); border-radius: 12px;
+	transition: border-color .15s, box-shadow .15s;
+}
+.search input::placeholder { color: var(--muted); }
+.search input:hover { border-color: rgba(255,255,255,0.28); }
+.search input:focus-visible {
+	outline: none; border-color: var(--accent-2);
+	box-shadow: 0 0 0 3px rgba(76, 195, 255, 0.22), 0 0 24px rgba(76, 195, 255, 0.25);
+}
+.search-status { font-size: 13px; color: var(--accent-2); font-variant-numeric: tabular-nums; text-shadow: 0 0 14px rgba(76,195,255,.4); }
+
+/* ---- Filter bar ---- */
+.filter-bar {
+	display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin-bottom: 18px;
+	padding: 10px 16px;
+	background: linear-gradient(90deg, rgba(139,124,255,0.10), rgba(76,195,255,0.06));
+	border: 1px dashed rgba(139, 124, 255, 0.4); border-radius: 14px;
+}
+.filter-intro { font-size: 10px; font-weight: 800; color: var(--accent); text-transform: uppercase; letter-spacing: .24em; text-shadow: 0 0 12px rgba(139,124,255,.5); }
+.filter-chip {
+	display: inline-flex; align-items: center; gap: 7px;
+	background: rgba(139, 124, 255, 0.16); border: 1px solid rgba(139, 124, 255, 0.55); border-radius: 999px;
+	padding: 4px 14px; font: inherit; font-size: 13px; font-weight: 600; color: var(--ink); cursor: pointer;
+	box-shadow: 0 0 16px rgba(139, 124, 255, 0.2), inset 0 1px 0 rgba(255,255,255,0.12);
+	transition: box-shadow .15s, border-color .15s, transform .15s;
+}
+.filter-chip:hover { border-color: var(--accent); box-shadow: 0 0 26px rgba(139, 124, 255, 0.45), inset 0 1px 0 rgba(255,255,255,0.16); transform: translateY(-1px); }
+.filter-chip .chip-x { font-size: 11px; color: var(--accent-2); }
+.filter-chip:focus-visible, .filter-clear:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+.filter-clear {
+	background: none; border: 1px solid transparent; padding: 4px 10px; font: inherit; font-size: 12px; font-weight: 600;
+	color: var(--muted); cursor: pointer; border-radius: 999px; letter-spacing: .04em;
+}
+.filter-clear:hover { color: var(--ink); border-color: var(--glass-border); background: rgba(255,255,255,0.05); }
+
+/* ---- Tabs ---- */
+[role="tablist"] {
+	display: inline-flex; gap: 4px; margin-bottom: 24px; padding: 5px;
+	background: var(--glass); border: 1px solid var(--glass-border); border-radius: 999px;
+	backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+	box-shadow: 0 10px 26px rgba(var(--sh), 0.45), inset 0 1px 0 var(--glass-highlight);
+}
+[role="tab"] {
+	background: none; border: 1px solid transparent; border-radius: 999px;
+	padding: 8px 22px; font: inherit; font-size: 14px; font-weight: 600;
+	color: var(--muted); cursor: pointer; letter-spacing: .01em;
+	transition: color .15s, background .15s, box-shadow .15s;
+}
+[role="tab"]:hover { color: var(--ink); }
+[role="tab"][aria-selected="true"] {
+	color: #fff;
+	background: linear-gradient(135deg, rgba(139,124,255,0.85), rgba(76,195,255,0.75));
+	box-shadow: 0 0 22px rgba(139, 124, 255, 0.5), inset 0 1px 0 rgba(255,255,255,0.35);
+	text-shadow: 0 1px 2px rgba(10, 11, 30, 0.4);
+}
+[role="tab"]:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+[role="tabpanel"][hidden] { display: none; }
+
+/* ---- Badges ---- */
+.badge {
+	--bcol: var(--none);
+	display: inline-flex; align-items: center; gap: 6px;
+	border-radius: 999px; padding: 2px 11px 2px 8px;
+	font-size: 12px; font-weight: 700; letter-spacing: .04em; white-space: nowrap;
+	color: color-mix(in srgb, var(--bcol) 78%, var(--mix-ink) 22%);
+	background: color-mix(in srgb, var(--bcol) 14%, transparent);
+	border: 1px solid color-mix(in srgb, var(--bcol) 45%, transparent);
+	box-shadow: 0 0 14px color-mix(in srgb, var(--bcol) 22%, transparent);
+	text-transform: uppercase;
+}
+.badge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--bcol); box-shadow: 0 0 8px var(--bcol); flex: none; }
+.badge-critical { --bcol: var(--critical); }
+.badge-serious { --bcol: var(--serious); }
+.badge-moderate { --bcol: var(--moderate); }
+.badge-minor { --bcol: var(--minor); }
+.badge-pass { --bcol: var(--pass); }
+
+/* ---- Rule accordions ---- */
+.rule {
+	--rcol: var(--none);
+	position: relative;
+	background: linear-gradient(165deg, rgba(255,255,255,0.07), rgba(255,255,255,0.01) 55%), var(--glass);
+	border: 1px solid var(--glass-border); border-radius: var(--radius);
+	margin-bottom: 12px; overflow: hidden;
+	backdrop-filter: blur(16px) saturate(1.3); -webkit-backdrop-filter: blur(16px) saturate(1.3);
+	box-shadow: 0 12px 30px rgba(var(--sh), 0.45), inset 0 1px 0 var(--glass-highlight);
+	transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+}
+.rule::before { /* neon rail */
+	content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+	background: linear-gradient(180deg, var(--rcol), color-mix(in srgb, var(--rcol) 30%, transparent));
+	box-shadow: 0 0 12px var(--rcol);
+}
+.rule:has(.badge-critical) { --rcol: var(--critical); }
+.rule:has(.badge-serious) { --rcol: var(--serious); }
+.rule:has(.badge-moderate) { --rcol: var(--moderate); }
+.rule:has(.badge-minor) { --rcol: var(--minor); }
+.rule:hover { transform: translateX(3px); border-color: rgba(255,255,255,0.24); }
+.rule-heading { margin: 0; font-size: inherit; font-weight: inherit; }
+.rule-toggle {
+	display: flex; flex-wrap: wrap; align-items: center; gap: 11px; width: 100%;
+	padding: 15px 18px 15px 20px; cursor: pointer; background: none; border: none;
+	font: inherit; color: inherit; text-align: left;
+}
+.rule-toggle:focus-visible { outline: 2px solid var(--accent-2); outline-offset: -3px; border-radius: var(--radius); }
+.rule-toggle code { font-weight: 700; font-size: 13.5px; color: var(--accent-2); font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; text-shadow: 0 0 14px rgba(76,195,255,.35); }
+.disclosure { color: var(--accent); font-size: 12px; transition: transform 0.18s ease; flex: none; filter: drop-shadow(0 0 6px rgba(139,124,255,.6)); }
+.rule-toggle[aria-expanded="true"] .disclosure { transform: rotate(90deg); }
+.rule-help { color: var(--ink-2); flex: 1 1 250px; font-size: 14px; }
+.counts {
+	color: var(--ink-2); font-size: 11.5px; margin-left: auto; font-variant-numeric: tabular-nums;
+	border: 1px solid var(--glass-border); border-radius: 999px; padding: 3px 11px;
+	background: rgba(255,255,255,0.04); letter-spacing: .03em; white-space: nowrap;
+}
+.rule-body {
+	padding: 16px 20px 18px; border-top: 1px solid var(--glass-border);
+	background: var(--well-3); font-size: 14px;
+}
+.rule-body > p:first-child { margin-top: 0; color: var(--ink-2); }
+.rule-url h4 { margin: 18px 0 8px; font-size: 13px; font-weight: 650; word-break: break-all; color: var(--accent-2); }
+.rule-url h4::before { content: "⌁ "; color: var(--accent); }
+ul.nodes { margin: 0; padding-left: 20px; }
+ul.nodes li { margin-bottom: 12px; }
+ul.nodes li::marker { color: var(--accent); }
+code.target, code.snippet {
+	display: block; overflow-x: auto; background: var(--well-2);
+	border: 1px solid var(--glass-border); border-radius: 10px;
+	padding: 7px 11px; font-size: 12.5px; margin: 3px 0;
+	font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+	box-shadow: inset 0 1px 4px rgba(0,0,0,0.35);
+}
+code.target { color: var(--pass); }
+code.snippet { color: var(--ink-2); }
+.hljs-tag { color: var(--hl-punct); }
+.hljs-name { color: var(--hl-tag); font-weight: 600; }
+.hljs-attr { color: var(--hl-attr); }
+.hljs-string { color: var(--hl-value); }
+.hljs-comment { color: var(--hl-comment); font-style: italic; }
+.hljs-symbol, .hljs-meta { color: var(--hl-punct); }
+code.snippet { color: var(--ink-2); }
+pre.failure {
+	margin: 7px 0 0; padding: 11px 14px; overflow-x: auto;
+	background: color-mix(in srgb, var(--critical) 10%, var(--well-2));
+	border: 1px solid color-mix(in srgb, var(--critical) 30%, transparent);
+	border-left: 3px solid var(--critical); border-radius: 10px;
+	font-size: 12.5px; white-space: pre-wrap; color: var(--ink-2);
+	font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+	box-shadow: 0 0 18px color-mix(in srgb, var(--critical) 12%, transparent);
+}
+
+/* ---- URL cards ---- */
+.url-card {
+	position: relative;
+	background: linear-gradient(165deg, rgba(255,255,255,0.07), rgba(255,255,255,0.01) 55%), var(--glass);
+	border: 1px solid var(--glass-border); border-radius: var(--radius);
+	padding: 18px 20px; margin-bottom: 14px; overflow: hidden;
+	backdrop-filter: blur(16px) saturate(1.3); -webkit-backdrop-filter: blur(16px) saturate(1.3);
+	box-shadow: 0 12px 30px rgba(var(--sh), 0.45), inset 0 1px 0 var(--glass-highlight);
+	transition: transform .16s ease, border-color .16s ease;
+}
+.url-card:hover { transform: translateY(-2px); border-color: rgba(255,255,255,0.24); }
+.url-card h3 { margin: 0 0 8px; font-size: 15.5px; font-weight: 650; word-break: break-all; letter-spacing: -0.01em; }
+.url-card h3::before { content: "⛁ "; color: var(--accent-2); font-weight: 400; }
+.url-card a { color: var(--accent-2); text-decoration: none; }
+.url-card a:hover { text-decoration: underline; text-shadow: 0 0 16px rgba(76,195,255,.5); }
+ul.url-violations { margin: 12px 0 0; padding-left: 0; list-style: none; }
+ul.url-violations li {
+	margin-bottom: 8px; font-size: 14px; padding: 7px 12px;
+	background: var(--well-3); border: 1px solid rgba(255,255,255,0.07); border-radius: 10px;
+	display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+}
+ul.url-violations code { font-size: 13px; font-weight: 700; color: var(--accent-2); font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+
+/* ---- Violation stream ---- */
+.stream-item {
+	--rcol: var(--none);
+	position: relative;
+	background: linear-gradient(165deg, rgba(255,255,255,0.07), rgba(255,255,255,0.01) 55%), var(--glass);
+	border: 1px solid var(--glass-border); border-radius: var(--radius);
+	padding: 14px 18px 14px 20px; margin-bottom: 12px; overflow: hidden;
+	backdrop-filter: blur(16px) saturate(1.3); -webkit-backdrop-filter: blur(16px) saturate(1.3);
+	box-shadow: 0 12px 30px rgba(var(--sh), 0.45), inset 0 1px 0 var(--glass-highlight);
+	transition: transform .16s ease, border-color .16s ease;
+}
+.stream-item::before {
+	content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+	background: linear-gradient(180deg, var(--rcol), color-mix(in srgb, var(--rcol) 30%, transparent));
+	box-shadow: 0 0 12px var(--rcol);
+}
+.stream-item:has(.badge-critical) { --rcol: var(--critical); }
+.stream-item:has(.badge-serious) { --rcol: var(--serious); }
+.stream-item:has(.badge-moderate) { --rcol: var(--moderate); }
+.stream-item:has(.badge-minor) { --rcol: var(--minor); }
+.stream-item:hover { transform: translateX(3px); border-color: rgba(255,255,255,0.24); }
+.stream-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0 0 9px; font-size: inherit; font-weight: inherit; }
+.stream-head code { font-weight: 700; font-size: 13.5px; color: var(--accent-2); font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; text-shadow: 0 0 14px rgba(76,195,255,.35); }
+.stream-url { flex-basis: 100%; color: var(--muted); font-size: 12.5px; word-break: break-all; }
+.stream-url::before { content: "⛁ "; color: var(--accent-2); }
+
+/* ---- Group sections ---- */
+section > h3 {
+	font-size: 13px; font-weight: 800; letter-spacing: .2em; text-transform: uppercase;
+	margin: 32px 0 14px; color: var(--ink-2);
+	display: flex; align-items: center; gap: 12px;
+}
+section > h3::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, var(--glass-border), transparent); }
+section > h3::before { content: "▣"; color: var(--accent); filter: drop-shadow(0 0 8px rgba(139,124,255,.6)); }
+
+.scan-error {
+	color: color-mix(in srgb, var(--critical) 80%, var(--mix-ink) 20%); font-size: 14px;
+	padding: 9px 13px; border-radius: 10px;
+	background: color-mix(in srgb, var(--critical) 12%, transparent);
+	border: 1px solid color-mix(in srgb, var(--critical) 35%, transparent);
+	display: inline-block;
+}
+.muted { color: var(--muted); }
+.empty { font-size: 18px; color: var(--ink-2); text-align: center; padding: 40px 0; }
+a { color: var(--accent-2); }
+
+::selection { background: rgba(139, 124, 255, 0.45); }
+@media (prefers-reduced-motion: reduce) {
+	*, body::before { transition: none !important; animation: none !important; }
+	.tile:hover, .rule:hover, .url-card:hover, .filter-chip:hover { transform: none; }
+}
+
+/* ---- Sidebar layout (default) ---- */
+main { max-width: 1240px; }
+.layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 24px; align-items: start; }
+.side { position: sticky; top: 24px; display: flex; flex-direction: column; gap: 14px; }
+.side .tiles { grid-template-columns: 1fr; gap: 10px; margin-bottom: 0; perspective: none; }
+.side .tile { flex-direction: row; align-items: center; justify-content: space-between; padding: 11px 14px; }
+.side .tile .value { font-size: 24px; }
+.side .tile:hover { transform: none; }
+.side .tile[aria-pressed="true"] .label::after { position: static; margin-left: 10px; }
+.side .search { flex-direction: column; align-items: stretch; gap: 8px; margin-bottom: 0; }
+.side .search input { max-width: none; flex: none; }
+.side .filter-bar { margin-bottom: 0; }
+@media (max-width: 920px) {
+	.layout { grid-template-columns: 1fr; }
+	.side { position: static; }
+	.side .tiles { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+}
+`;
+const SCRIPT = `
+const tablists = [...document.querySelectorAll('[role="tablist"]')];
+for (const tablist of tablists) {
+	const tabs = [...tablist.querySelectorAll('[role="tab"]')];
+	const needsFilter = tablist.closest('#page-report') != null;
+	function select(tab) {
+		for (const t of tabs) {
+			const on = t === tab;
+			t.setAttribute('aria-selected', String(on));
+			t.tabIndex = on ? 0 : -1;
+			document.getElementById(t.getAttribute('aria-controls')).hidden = !on;
+		}
+		tab.focus();
+		if (needsFilter) applyFilter();
+	}
+	for (const tab of tabs) {
+		tab.addEventListener('click', () => select(tab));
+		tab.addEventListener('keydown', (e) => {
+			const i = tabs.indexOf(tab);
+			let next = null;
+			if (e.key === 'ArrowRight') next = tabs[(i + 1) % tabs.length];
+			if (e.key === 'ArrowLeft') next = tabs[(i - 1 + tabs.length) % tabs.length];
+			if (e.key === 'Home') next = tabs[0];
+			if (e.key === 'End') next = tabs[tabs.length - 1];
+			if (next) { e.preventDefault(); select(next); }
+		});
+	}
+}
+
+const IMPACT_NAMES = { critical: 'Critical', serious: 'Serious', moderate: 'Moderate', minor: 'Minor', none: 'No impact' };
+const searchInput = document.getElementById('search-input');
+const searchStatus = document.getElementById('search-status');
+const filterBar = document.getElementById('filter-bar');
+const impactTiles = [...document.querySelectorAll('[data-impact-filter]')];
+const activeImpacts = new Set();
+let wasFiltered = false;
+
+function makeChip(label, onRemove) {
+	const chip = document.createElement('button');
+	chip.type = 'button';
+	chip.className = 'filter-chip';
+	chip.append(label);
+	const x = document.createElement('span');
+	x.className = 'chip-x';
+	x.setAttribute('aria-hidden', 'true');
+	x.textContent = '✕';
+	chip.append(' ', x);
+	chip.setAttribute('aria-label', 'Remove filter: ' + label);
+	chip.addEventListener('click', onRemove);
+	return chip;
+}
+
+function renderFilterBar(query) {
+	filterBar.textContent = '';
+	const chips = [];
+	for (const key of Object.keys(IMPACT_NAMES)) {
+		if (!activeImpacts.has(key)) continue;
+		const chip = makeChip(IMPACT_NAMES[key], () => toggleImpact(key));
+		chip.classList.add('chip-' + key);
+		chips.push(chip);
+	}
+	if (query) {
+		chips.push(makeChip('Search: “' + query + '”', () => { searchInput.value = ''; applyFilter(); }));
+	}
+	filterBar.hidden = chips.length === 0;
+	if (chips.length === 0) return;
+	const intro = document.createElement('span');
+	intro.className = 'filter-intro';
+	intro.textContent = 'Filtering by:';
+	filterBar.append(intro, ...chips);
+	if (chips.length > 1) {
+		const clear = document.createElement('button');
+		clear.type = 'button';
+		clear.className = 'filter-clear';
+		clear.textContent = 'Clear all';
+		clear.addEventListener('click', () => {
+			activeImpacts.clear();
+			searchInput.value = '';
+			applyFilter();
+		});
+		filterBar.append(clear);
+	}
+}
+
+function applyFilter() {
+	const query = searchInput.value.trim().toLowerCase();
+	for (const tile of impactTiles) {
+		tile.setAttribute('aria-pressed', String(activeImpacts.has(tile.getAttribute('data-impact-filter'))));
+	}
+	const panel = document.querySelector('[role="tabpanel"]:not([hidden])');
+	const items = [...panel.querySelectorAll('[data-search]')];
+	let shown = 0;
+	for (const el of items) {
+		const impacts = (el.getAttribute('data-impacts') || '').split(' ');
+		const matchesQuery = !query || el.getAttribute('data-search').includes(query);
+		const matchesImpact = activeImpacts.size === 0 || impacts.some((i) => activeImpacts.has(i));
+		el.hidden = !(matchesQuery && matchesImpact);
+		if (!el.hidden) shown++;
+	}
+	for (const section of panel.querySelectorAll('section:not(.url-card)')) {
+		section.hidden = !section.querySelector('[data-search]:not([hidden])');
+	}
+	const filtered = Boolean(query) || activeImpacts.size > 0;
+	if (filtered) {
+		searchStatus.textContent = 'Showing ' + shown + ' of ' + items.length + ' results';
+	} else {
+		searchStatus.textContent = wasFiltered ? 'Filters cleared. Showing all ' + items.length + ' results' : '';
+	}
+	wasFiltered = filtered;
+	renderFilterBar(query);
+}
+
+function toggleImpact(key) {
+	if (activeImpacts.has(key)) activeImpacts.delete(key);
+	else activeImpacts.add(key);
+	applyFilter();
+}
+
+for (const tile of impactTiles) {
+	tile.addEventListener('click', () => toggleImpact(tile.getAttribute('data-impact-filter')));
+}
+
+for (const toggle of document.querySelectorAll('.rule-toggle')) {
+	toggle.addEventListener('click', () => {
+		const expanded = toggle.getAttribute('aria-expanded') === 'true';
+		toggle.setAttribute('aria-expanded', String(!expanded));
+		document.getElementById(toggle.getAttribute('aria-controls')).hidden = expanded;
+	});
+}
+
+let searchTimer;
+searchInput.addEventListener('input', () => {
+	clearTimeout(searchTimer);
+	searchTimer = setTimeout(applyFilter, 200);
+});
+searchInput.addEventListener('search', applyFilter);
+
+const pages = [...document.querySelectorAll('.page')];
+const pageLinks = [...document.querySelectorAll('.page-nav a')];
+function syncPage() {
+	const hash = location.hash === '#page-personas' ? '#page-personas' : '#page-report';
+	for (const p of pages) {
+		p.hidden = ('#' + p.id) !== hash;
+	}
+	for (const a of pageLinks) {
+		if (a.getAttribute('href') === hash) {
+			a.setAttribute('aria-current', 'page');
+		} else {
+			a.removeAttribute('aria-current');
+		}
+	}
+}
+window.addEventListener('hashchange', syncPage);
+syncPage();
+
+const themeButtons = [...document.querySelectorAll('[data-theme-choice]')];
+function applyTheme(choice) {
+	if (choice === 'system') {
+		document.documentElement.removeAttribute('data-theme');
+	} else {
+		document.documentElement.setAttribute('data-theme', choice);
+	}
+	for (const b of themeButtons) {
+		b.setAttribute('aria-pressed', String(b.getAttribute('data-theme-choice') === choice));
+	}
+	try { localStorage.setItem('axe-report-theme', choice); } catch {}
+}
+let savedTheme = 'system';
+try {
+	const stored = localStorage.getItem('axe-report-theme');
+	if (stored === 'light' || stored === 'dark' || stored === 'system') savedTheme = stored;
+} catch {}
+applyTheme(savedTheme);
+for (const b of themeButtons) {
+	b.addEventListener('click', () => applyTheme(b.getAttribute('data-theme-choice')));
+}
+`;
+const TILE_ORDER = ['critical', 'serious', 'moderate', 'minor', 'none'];
+/** Render the whole self-contained report page. */
+function renderReport(title, results, agg) {
+    const tiles = TILE_ORDER.map((key) => `<button type="button" class="tile tile-${key}" data-impact-filter="${key}" aria-pressed="false">
+		<span class="label">${IMPACT_LABELS[key]}</span>
+		<span class="value">${agg.counts[key]}</span>
+	</button>`).join('');
+    const metaParts = [
+        `Generated ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC`,
+        agg.engine || null,
+        `${plural(agg.scannedUrls, 'URL')} scanned${agg.erroredUrls ? ` (${agg.erroredUrls} failed)` : ''}`,
+        `${plural(agg.totalViolations, 'violation')}`,
+    ].filter(Boolean);
+    const tabDefs = [
+        { id: 'rule', label: 'By rule', heading: 'Violations by rule', body: renderByRuleTab(agg) },
+        { id: 'url', label: 'By URL', heading: 'Violations by URL', body: renderByUrlTab(results) },
+        { id: 'group', label: 'By group', heading: 'Violations by group', body: renderByGroupTab(agg) },
+        { id: 'stream', label: 'All violations', heading: 'All violations', body: renderStreamTab(results) },
+    ];
+    const tabButtons = tabDefs.map((t, i) => `<button role="tab" id="tab-${t.id}" aria-controls="panel-${t.id}" aria-selected="${i === 0}" tabindex="${i === 0 ? 0 : -1}">${t.label}</button>`).join('');
+    const tabPanels = tabDefs.map((t, i) => `<div role="tabpanel" id="panel-${t.id}" aria-labelledby="tab-${t.id}"${i === 0 ? '' : ' hidden'}><h2 class="sr-only">${t.heading}</h2>${t.body}</div>`).join('\n');
+    return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>${esc(title)}</title>
+<style>${STYLE}</style>
+</head>
+<body>
+<main>
+	<nav class="page-nav" aria-label="Report pages">
+		<ul>
+			<li><a href="#page-report" aria-current="page">Report</a></li>
+			<li><a href="#page-personas">Personas</a></li>
+		</ul>
+	</nav>
+	<header class="report">
+		<div class="theme-toggle" role="group" aria-label="Color theme">
+			<button type="button" data-theme-choice="light" aria-pressed="false">☀ Light</button>
+			<button type="button" data-theme-choice="system" aria-pressed="true">◐ System</button>
+			<button type="button" data-theme-choice="dark" aria-pressed="false">☾ Dark</button>
+		</div>
+		<h1>${esc(title)}</h1>
+		<p class="meta">${metaParts.map((p) => esc(p)).join(' · ')}</p>
+	</header>
+	<div class="page" id="page-report">
+	<div class="layout">
+		<aside class="side">
+			<div class="search">
+				<label for="search-input">Search</label>
+				<input type="search" id="search-input" placeholder="Filter by rule, description, or URL…" autocomplete="off">
+				<span class="search-status" id="search-status" role="status" aria-live="polite"></span>
+			</div>
+			<div class="tiles">${tiles}</div>
+			<div class="filter-bar" id="filter-bar" role="group" aria-label="Active filters" hidden></div>
+		</aside>
+		<div class="content">
+			<div role="tablist" aria-label="Violation views">${tabButtons}</div>
+			${tabPanels}
+		</div>
+	</div>
+	</div>
+	<div class="page" id="page-personas" hidden>
+		${renderPersonasPage(agg)}
+	</div>
+</main>
+<script>${SCRIPT}</script>
+</body>
+</html>
+`;
+}
+/**
+ * Build a polished, self-contained HTML accessibility report: tabs (by rule, by
+ * URL, by group, all violations) plus a Personas page mapping findings to the
+ * real GOV.UK / GDS accessibility persona set. All CSS/JS are inline — the
+ * result works from a plain file:// URL, no network access needed. Meant for
+ * sharing with non-technical stakeholders; see buildReport() for the
+ * Markdown/job-summary equivalent.
+ */
+function buildHtmlReport(results, options = {}) {
+    const { title = 'Accessibility report' } = options;
+    const agg = (0, aggregate_1.aggregate)(results);
+    return renderReport(title, results, agg);
+}
+
+
+/***/ }),
+
 /***/ 5671:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.ruleToPersonaKeys = exports.personasForRule = exports.personaByKey = exports.personas = exports.IMPACT_ORDER = exports.normalizeResults = exports.buildReport = void 0;
+exports.GROUP_ORDER = exports.groupForTags = exports.aggregate = exports.buildHtmlReport = exports.ruleToPersonaKeys = exports.personasForRule = exports.personaByKey = exports.personas = exports.IMPACT_ORDER = exports.normalizeResults = exports.buildReport = void 0;
 var report_1 = __nccwpck_require__(4257);
 Object.defineProperty(exports, "buildReport", ({ enumerable: true, get: function () { return report_1.buildReport; } }));
 Object.defineProperty(exports, "normalizeResults", ({ enumerable: true, get: function () { return report_1.normalizeResults; } }));
@@ -27674,6 +28908,12 @@ Object.defineProperty(exports, "personas", ({ enumerable: true, get: function ()
 Object.defineProperty(exports, "personaByKey", ({ enumerable: true, get: function () { return personas_1.personaByKey; } }));
 Object.defineProperty(exports, "personasForRule", ({ enumerable: true, get: function () { return personas_1.personasForRule; } }));
 Object.defineProperty(exports, "ruleToPersonaKeys", ({ enumerable: true, get: function () { return personas_1.ruleToPersonaKeys; } }));
+var html_1 = __nccwpck_require__(2234);
+Object.defineProperty(exports, "buildHtmlReport", ({ enumerable: true, get: function () { return html_1.buildHtmlReport; } }));
+var aggregate_1 = __nccwpck_require__(8140);
+Object.defineProperty(exports, "aggregate", ({ enumerable: true, get: function () { return aggregate_1.aggregate; } }));
+Object.defineProperty(exports, "groupForTags", ({ enumerable: true, get: function () { return aggregate_1.groupForTags; } }));
+Object.defineProperty(exports, "GROUP_ORDER", ({ enumerable: true, get: function () { return aggregate_1.GROUP_ORDER; } }));
 
 
 /***/ }),
@@ -27693,6 +28933,7 @@ exports.personas = [
         userType: 'Blind & Screen Reader Users',
         identity: 'Partially sighted, uses JAWS and other screen reader features',
         needs: 'Clear semantic structure, labelled controls, and full keyboard access',
+        icon: '⠿',
     },
     {
         key: 'claudia',
@@ -27700,6 +28941,7 @@ exports.personas = [
         userType: 'Low-Vision & Magnification Users',
         identity: 'Partially sighted (glaucoma, diabetes), uses ZoomText and a large monitor',
         needs: 'Strong contrast, predictable layout, content that reflows under magnification',
+        icon: '◑',
     },
     {
         key: 'christopher',
@@ -27707,6 +28949,7 @@ exports.personas = [
         userType: 'Motor & Dexterity Users',
         identity: 'Has rheumatoid arthritis, prefers keyboard access, exploring speech recognition',
         needs: 'Full keyboard operability, generous touch targets, no drag-and-drop-only controls',
+        icon: '⌨',
     },
     {
         key: 'pawel',
@@ -27714,6 +28957,7 @@ exports.personas = [
         userType: 'Autistic & Cognitive-Load-Sensitive Users',
         identity: 'Autistic, experiences anxiety, prefers simpler and less cluttered interfaces',
         needs: 'Predictable layouts, plain language, minimal motion and distraction',
+        icon: '✳',
     },
     {
         key: 'ron',
@@ -27721,6 +28965,7 @@ exports.personas = [
         userType: 'Older Users',
         identity: 'Older user with arthritis, cataracts, and hearing loss',
         needs: 'Large text, high contrast, and simple, uncluttered forms',
+        icon: '◈',
     },
     {
         key: 'saleem',
@@ -27728,6 +28973,7 @@ exports.personas = [
         userType: 'Deaf & Hard-of-Hearing Users',
         identity: 'Profoundly deaf, BSL is his first language',
         needs: 'Accurate captions and transcripts, and non-audio contact routes',
+        icon: '◌',
     },
     {
         key: 'simone',
@@ -27735,6 +28981,7 @@ exports.personas = [
         userType: 'Dyslexic Users',
         identity: 'Dyslexic, benefits from plain language and strong structure',
         needs: 'Clear headings, readable typography, and uncomplicated forms',
+        icon: '❖',
     },
 ];
 exports.personaByKey = new Map(exports.personas.map((persona) => [persona.key, persona]));
@@ -27780,6 +29027,7 @@ function personasForRule(ruleId) {
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.IMPACT_ORDER = void 0;
+exports.impactRank = impactRank;
 exports.normalizeResults = normalizeResults;
 exports.buildReport = buildReport;
 const personas_1 = __nccwpck_require__(3858);
@@ -27918,6 +29166,2858 @@ function buildPersonaSection(results) {
     }
     return lines;
 }
+
+
+/***/ }),
+
+/***/ 8053:
+/***/ ((module) => {
+
+/* eslint-disable no-multi-assign */
+
+function deepFreeze(obj) {
+  if (obj instanceof Map) {
+    obj.clear =
+      obj.delete =
+      obj.set =
+        function () {
+          throw new Error('map is read-only');
+        };
+  } else if (obj instanceof Set) {
+    obj.add =
+      obj.clear =
+      obj.delete =
+        function () {
+          throw new Error('set is read-only');
+        };
+  }
+
+  // Freeze self
+  Object.freeze(obj);
+
+  Object.getOwnPropertyNames(obj).forEach((name) => {
+    const prop = obj[name];
+    const type = typeof prop;
+
+    // Freeze prop if it is an object or function and also not already frozen
+    if ((type === 'object' || type === 'function') && !Object.isFrozen(prop)) {
+      deepFreeze(prop);
+    }
+  });
+
+  return obj;
+}
+
+/** @typedef {import('highlight.js').CallbackResponse} CallbackResponse */
+/** @typedef {import('highlight.js').CompiledMode} CompiledMode */
+/** @implements CallbackResponse */
+
+class Response {
+  /**
+   * @param {CompiledMode} mode
+   */
+  constructor(mode) {
+    // eslint-disable-next-line no-undefined
+    if (mode.data === undefined) mode.data = {};
+
+    this.data = mode.data;
+    this.isMatchIgnored = false;
+  }
+
+  ignoreMatch() {
+    this.isMatchIgnored = true;
+  }
+}
+
+/**
+ * @param {string} value
+ * @returns {string}
+ */
+function escapeHTML(value) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;');
+}
+
+/**
+ * performs a shallow merge of multiple objects into one
+ *
+ * @template T
+ * @param {T} original
+ * @param {Record<string,any>[]} objects
+ * @returns {T} a single new object
+ */
+function inherit$1(original, ...objects) {
+  /** @type Record<string,any> */
+  const result = Object.create(null);
+
+  for (const key in original) {
+    result[key] = original[key];
+  }
+  objects.forEach(function(obj) {
+    for (const key in obj) {
+      result[key] = obj[key];
+    }
+  });
+  return /** @type {T} */ (result);
+}
+
+/**
+ * @typedef {object} Renderer
+ * @property {(text: string) => void} addText
+ * @property {(node: Node) => void} openNode
+ * @property {(node: Node) => void} closeNode
+ * @property {() => string} value
+ */
+
+/** @typedef {{scope?: string, language?: string, sublanguage?: boolean}} Node */
+/** @typedef {{walk: (r: Renderer) => void}} Tree */
+/** */
+
+const SPAN_CLOSE = '</span>';
+
+/**
+ * Determines if a node needs to be wrapped in <span>
+ *
+ * @param {Node} node */
+const emitsWrappingTags = (node) => {
+  // rarely we can have a sublanguage where language is undefined
+  // TODO: track down why
+  return !!node.scope;
+};
+
+/**
+ *
+ * @param {string} name
+ * @param {{prefix:string}} options
+ */
+const scopeToCSSClass = (name, { prefix }) => {
+  // sub-language
+  if (name.startsWith("language:")) {
+    return name.replace("language:", "language-");
+  }
+  // tiered scope: comment.line
+  if (name.includes(".")) {
+    const pieces = name.split(".");
+    return [
+      `${prefix}${pieces.shift()}`,
+      ...(pieces.map((x, i) => `${x}${"_".repeat(i + 1)}`))
+    ].join(" ");
+  }
+  // simple scope
+  return `${prefix}${name}`;
+};
+
+/** @type {Renderer} */
+class HTMLRenderer {
+  /**
+   * Creates a new HTMLRenderer
+   *
+   * @param {Tree} parseTree - the parse tree (must support `walk` API)
+   * @param {{classPrefix: string}} options
+   */
+  constructor(parseTree, options) {
+    this.buffer = "";
+    this.classPrefix = options.classPrefix;
+    parseTree.walk(this);
+  }
+
+  /**
+   * Adds texts to the output stream
+   *
+   * @param {string} text */
+  addText(text) {
+    this.buffer += escapeHTML(text);
+  }
+
+  /**
+   * Adds a node open to the output stream (if needed)
+   *
+   * @param {Node} node */
+  openNode(node) {
+    if (!emitsWrappingTags(node)) return;
+
+    const className = scopeToCSSClass(node.scope,
+      { prefix: this.classPrefix });
+    this.span(className);
+  }
+
+  /**
+   * Adds a node close to the output stream (if needed)
+   *
+   * @param {Node} node */
+  closeNode(node) {
+    if (!emitsWrappingTags(node)) return;
+
+    this.buffer += SPAN_CLOSE;
+  }
+
+  /**
+   * returns the accumulated buffer
+  */
+  value() {
+    return this.buffer;
+  }
+
+  // helpers
+
+  /**
+   * Builds a span element
+   *
+   * @param {string} className */
+  span(className) {
+    this.buffer += `<span class="${className}">`;
+  }
+}
+
+/** @typedef {{scope?: string, language?: string, children: Node[]} | string} Node */
+/** @typedef {{scope?: string, language?: string, children: Node[]} } DataNode */
+/** @typedef {import('highlight.js').Emitter} Emitter */
+/**  */
+
+/** @returns {DataNode} */
+const newNode = (opts = {}) => {
+  /** @type DataNode */
+  const result = { children: [] };
+  Object.assign(result, opts);
+  return result;
+};
+
+class TokenTree {
+  constructor() {
+    /** @type DataNode */
+    this.rootNode = newNode();
+    this.stack = [this.rootNode];
+  }
+
+  get top() {
+    return this.stack[this.stack.length - 1];
+  }
+
+  get root() { return this.rootNode; }
+
+  /** @param {Node} node */
+  add(node) {
+    this.top.children.push(node);
+  }
+
+  /** @param {string} scope */
+  openNode(scope) {
+    /** @type Node */
+    const node = newNode({ scope });
+    this.add(node);
+    this.stack.push(node);
+  }
+
+  closeNode() {
+    if (this.stack.length > 1) {
+      return this.stack.pop();
+    }
+    // eslint-disable-next-line no-undefined
+    return undefined;
+  }
+
+  closeAllNodes() {
+    while (this.closeNode());
+  }
+
+  toJSON() {
+    return JSON.stringify(this.rootNode, null, 4);
+  }
+
+  /**
+   * @typedef { import("./html_renderer").Renderer } Renderer
+   * @param {Renderer} builder
+   */
+  walk(builder) {
+    // this does not
+    return this.constructor._walk(builder, this.rootNode);
+    // this works
+    // return TokenTree._walk(builder, this.rootNode);
+  }
+
+  /**
+   * @param {Renderer} builder
+   * @param {Node} node
+   */
+  static _walk(builder, node) {
+    if (typeof node === "string") {
+      builder.addText(node);
+    } else if (node.children) {
+      builder.openNode(node);
+      node.children.forEach((child) => this._walk(builder, child));
+      builder.closeNode(node);
+    }
+    return builder;
+  }
+
+  /**
+   * @param {Node} node
+   */
+  static _collapse(node) {
+    if (typeof node === "string") return;
+    if (!node.children) return;
+
+    if (node.children.every(el => typeof el === "string")) {
+      // node.text = node.children.join("");
+      // delete node.children;
+      node.children = [node.children.join("")];
+    } else {
+      node.children.forEach((child) => {
+        TokenTree._collapse(child);
+      });
+    }
+  }
+}
+
+/**
+  Currently this is all private API, but this is the minimal API necessary
+  that an Emitter must implement to fully support the parser.
+
+  Minimal interface:
+
+  - addText(text)
+  - __addSublanguage(emitter, subLanguageName)
+  - startScope(scope)
+  - endScope()
+  - finalize()
+  - toHTML()
+
+*/
+
+/**
+ * @implements {Emitter}
+ */
+class TokenTreeEmitter extends TokenTree {
+  /**
+   * @param {*} options
+   */
+  constructor(options) {
+    super();
+    this.options = options;
+  }
+
+  /**
+   * @param {string} text
+   */
+  addText(text) {
+    if (text === "") { return; }
+
+    this.add(text);
+  }
+
+  /** @param {string} scope */
+  startScope(scope) {
+    this.openNode(scope);
+  }
+
+  endScope() {
+    this.closeNode();
+  }
+
+  /**
+   * @param {Emitter & {root: DataNode}} emitter
+   * @param {string} name
+   */
+  __addSublanguage(emitter, name) {
+    /** @type DataNode */
+    const node = emitter.root;
+    if (name) node.scope = `language:${name}`;
+
+    this.add(node);
+  }
+
+  toHTML() {
+    const renderer = new HTMLRenderer(this, this.options);
+    return renderer.value();
+  }
+
+  finalize() {
+    this.closeAllNodes();
+    return true;
+  }
+}
+
+/**
+ * @param {string} value
+ * @returns {RegExp}
+ * */
+
+/**
+ * @param {RegExp | string } re
+ * @returns {string}
+ */
+function source(re) {
+  if (!re) return null;
+  if (typeof re === "string") return re;
+
+  return re.source;
+}
+
+/**
+ * @param {RegExp | string } re
+ * @returns {string}
+ */
+function lookahead(re) {
+  return concat('(?=', re, ')');
+}
+
+/**
+ * @param {RegExp | string } re
+ * @returns {string}
+ */
+function anyNumberOfTimes(re) {
+  return concat('(?:', re, ')*');
+}
+
+/**
+ * @param {RegExp | string } re
+ * @returns {string}
+ */
+function optional(re) {
+  return concat('(?:', re, ')?');
+}
+
+/**
+ * @param {...(RegExp | string) } args
+ * @returns {string}
+ */
+function concat(...args) {
+  const joined = args.map((x) => source(x)).join("");
+  return joined;
+}
+
+/**
+ * @param { Array<string | RegExp | Object> } args
+ * @returns {object}
+ */
+function stripOptionsFromArgs(args) {
+  const opts = args[args.length - 1];
+
+  if (typeof opts === 'object' && opts.constructor === Object) {
+    args.splice(args.length - 1, 1);
+    return opts;
+  } else {
+    return {};
+  }
+}
+
+/** @typedef { {capture?: boolean} } RegexEitherOptions */
+
+/**
+ * Any of the passed expresssions may match
+ *
+ * Creates a huge this | this | that | that match
+ * @param {(RegExp | string)[] | [...(RegExp | string)[], RegexEitherOptions]} args
+ * @returns {string}
+ */
+function either(...args) {
+  /** @type { object & {capture?: boolean} }  */
+  const opts = stripOptionsFromArgs(args);
+  const joined = '('
+    + (opts.capture ? "" : "?:")
+    + args.map((x) => source(x)).join("|") + ")";
+  return joined;
+}
+
+/**
+ * @param {RegExp | string} re
+ * @returns {number}
+ */
+function countMatchGroups(re) {
+  return (new RegExp(re.toString() + '|')).exec('').length - 1;
+}
+
+/**
+ * Does lexeme start with a regular expression match at the beginning
+ * @param {RegExp} re
+ * @param {string} lexeme
+ */
+function startsWith(re, lexeme) {
+  const match = re && re.exec(lexeme);
+  return match && match.index === 0;
+}
+
+// BACKREF_RE matches an open parenthesis or backreference. To avoid
+// an incorrect parse, it additionally matches the following:
+// - [...] elements, where the meaning of parentheses and escapes change
+// - other escape sequences, so we do not misparse escape sequences as
+//   interesting elements
+// - non-matching or lookahead parentheses, which do not capture. These
+//   follow the '(' with a '?'.
+const BACKREF_RE = /\[(?:[^\\\]]|\\.)*\]|\(\??|\\([1-9][0-9]*)|\\./;
+
+// **INTERNAL** Not intended for outside usage
+// join logically computes regexps.join(separator), but fixes the
+// backreferences so they continue to match.
+// it also places each individual regular expression into it's own
+// match group, keeping track of the sequencing of those match groups
+// is currently an exercise for the caller. :-)
+/**
+ * @param {(string | RegExp)[]} regexps
+ * @param {{joinWith: string}} opts
+ * @returns {string}
+ */
+function _rewriteBackreferences(regexps, { joinWith }) {
+  let numCaptures = 0;
+
+  return regexps.map((regex) => {
+    numCaptures += 1;
+    const offset = numCaptures;
+    let re = source(regex);
+    let out = '';
+
+    while (re.length > 0) {
+      const match = BACKREF_RE.exec(re);
+      if (!match) {
+        out += re;
+        break;
+      }
+      out += re.substring(0, match.index);
+      re = re.substring(match.index + match[0].length);
+      if (match[0][0] === '\\' && match[1]) {
+        // Adjust the backreference.
+        out += '\\' + String(Number(match[1]) + offset);
+      } else {
+        out += match[0];
+        if (match[0] === '(') {
+          numCaptures++;
+        }
+      }
+    }
+    return out;
+  }).map(re => `(${re})`).join(joinWith);
+}
+
+/** @typedef {import('highlight.js').Mode} Mode */
+/** @typedef {import('highlight.js').ModeCallback} ModeCallback */
+
+// Common regexps
+const MATCH_NOTHING_RE = /\b\B/;
+const IDENT_RE = '[a-zA-Z]\\w*';
+const UNDERSCORE_IDENT_RE = '[a-zA-Z_]\\w*';
+const NUMBER_RE = '\\b\\d+(\\.\\d+)?';
+const C_NUMBER_RE = '(-?)(\\b0[xX][a-fA-F0-9]+|(\\b\\d+(\\.\\d*)?|\\.\\d+)([eE][-+]?\\d+)?)'; // 0x..., 0..., decimal, float
+const BINARY_NUMBER_RE = '\\b(0b[01]+)'; // 0b...
+const RE_STARTERS_RE = '!|!=|!==|%|%=|&|&&|&=|\\*|\\*=|\\+|\\+=|,|-|-=|/=|/|:|;|<<|<<=|<=|<|===|==|=|>>>=|>>=|>=|>>>|>>|>|\\?|\\[|\\{|\\(|\\^|\\^=|\\||\\|=|\\|\\||~';
+
+/**
+* @param { Partial<Mode> & {binary?: string | RegExp} } opts
+*/
+const SHEBANG = (opts = {}) => {
+  const beginShebang = /^#![ ]*\//;
+  if (opts.binary) {
+    opts.begin = concat(
+      beginShebang,
+      /.*\b/,
+      opts.binary,
+      /\b.*/);
+  }
+  return inherit$1({
+    scope: 'meta',
+    begin: beginShebang,
+    end: /$/,
+    relevance: 0,
+    /** @type {ModeCallback} */
+    "on:begin": (m, resp) => {
+      if (m.index !== 0) resp.ignoreMatch();
+    }
+  }, opts);
+};
+
+// Common modes
+const BACKSLASH_ESCAPE = {
+  begin: '\\\\[\\s\\S]', relevance: 0
+};
+const APOS_STRING_MODE = {
+  scope: 'string',
+  begin: '\'',
+  end: '\'',
+  illegal: '\\n',
+  contains: [BACKSLASH_ESCAPE]
+};
+const QUOTE_STRING_MODE = {
+  scope: 'string',
+  begin: '"',
+  end: '"',
+  illegal: '\\n',
+  contains: [BACKSLASH_ESCAPE]
+};
+const PHRASAL_WORDS_MODE = {
+  begin: /\b(a|an|the|are|I'm|isn't|don't|doesn't|won't|but|just|should|pretty|simply|enough|gonna|going|wtf|so|such|will|you|your|they|like|more)\b/
+};
+/**
+ * Creates a comment mode
+ *
+ * @param {string | RegExp} begin
+ * @param {string | RegExp} end
+ * @param {Mode | {}} [modeOptions]
+ * @returns {Partial<Mode>}
+ */
+const COMMENT = function(begin, end, modeOptions = {}) {
+  const mode = inherit$1(
+    {
+      scope: 'comment',
+      begin,
+      end,
+      contains: []
+    },
+    modeOptions
+  );
+  mode.contains.push({
+    scope: 'doctag',
+    // hack to avoid the space from being included. the space is necessary to
+    // match here to prevent the plain text rule below from gobbling up doctags
+    begin: '[ ]*(?=(TODO|FIXME|NOTE|BUG|OPTIMIZE|HACK|XXX):)',
+    end: /(TODO|FIXME|NOTE|BUG|OPTIMIZE|HACK|XXX):/,
+    excludeBegin: true,
+    relevance: 0
+  });
+  const ENGLISH_WORD = either(
+    // list of common 1 and 2 letter words in English
+    "I",
+    "a",
+    "is",
+    "so",
+    "us",
+    "to",
+    "at",
+    "if",
+    "in",
+    "it",
+    "on",
+    // note: this is not an exhaustive list of contractions, just popular ones
+    /[A-Za-z]+['](d|ve|re|ll|t|s|n)/, // contractions - can't we'd they're let's, etc
+    /[A-Za-z]+[-][a-z]+/, // `no-way`, etc.
+    /[A-Za-z][a-z]{2,}/ // allow capitalized words at beginning of sentences
+  );
+  // looking like plain text, more likely to be a comment
+  mode.contains.push(
+    {
+      // TODO: how to include ", (, ) without breaking grammars that use these for
+      // comment delimiters?
+      // begin: /[ ]+([()"]?([A-Za-z'-]{3,}|is|a|I|so|us|[tT][oO]|at|if|in|it|on)[.]?[()":]?([.][ ]|[ ]|\))){3}/
+      // ---
+
+      // this tries to find sequences of 3 english words in a row (without any
+      // "programming" type syntax) this gives us a strong signal that we've
+      // TRULY found a comment - vs perhaps scanning with the wrong language.
+      // It's possible to find something that LOOKS like the start of the
+      // comment - but then if there is no readable text - good chance it is a
+      // false match and not a comment.
+      //
+      // for a visual example please see:
+      // https://github.com/highlightjs/highlight.js/issues/2827
+
+      begin: concat(
+        /[ ]+/, // necessary to prevent us gobbling up doctags like /* @author Bob Mcgill */
+        '(',
+        ENGLISH_WORD,
+        /[.]?[:]?([.][ ]|[ ])/,
+        '){3}') // look for 3 words in a row
+    }
+  );
+  return mode;
+};
+const C_LINE_COMMENT_MODE = COMMENT('//', '$');
+const C_BLOCK_COMMENT_MODE = COMMENT('/\\*', '\\*/');
+const HASH_COMMENT_MODE = COMMENT('#', '$');
+const NUMBER_MODE = {
+  scope: 'number',
+  begin: NUMBER_RE,
+  relevance: 0
+};
+const C_NUMBER_MODE = {
+  scope: 'number',
+  begin: C_NUMBER_RE,
+  relevance: 0
+};
+const BINARY_NUMBER_MODE = {
+  scope: 'number',
+  begin: BINARY_NUMBER_RE,
+  relevance: 0
+};
+const REGEXP_MODE = {
+  scope: "regexp",
+  begin: /\/(?=[^/\n]*\/)/,
+  end: /\/[gimuy]*/,
+  contains: [
+    BACKSLASH_ESCAPE,
+    {
+      begin: /\[/,
+      end: /\]/,
+      relevance: 0,
+      contains: [BACKSLASH_ESCAPE]
+    }
+  ]
+};
+const TITLE_MODE = {
+  scope: 'title',
+  begin: IDENT_RE,
+  relevance: 0
+};
+const UNDERSCORE_TITLE_MODE = {
+  scope: 'title',
+  begin: UNDERSCORE_IDENT_RE,
+  relevance: 0
+};
+const METHOD_GUARD = {
+  // excludes method names from keyword processing
+  begin: '\\.\\s*' + UNDERSCORE_IDENT_RE,
+  relevance: 0
+};
+
+/**
+ * Adds end same as begin mechanics to a mode
+ *
+ * Your mode must include at least a single () match group as that first match
+ * group is what is used for comparison
+ * @param {Partial<Mode>} mode
+ */
+const END_SAME_AS_BEGIN = function(mode) {
+  return Object.assign(mode,
+    {
+      /** @type {ModeCallback} */
+      'on:begin': (m, resp) => { resp.data._beginMatch = m[1]; },
+      /** @type {ModeCallback} */
+      'on:end': (m, resp) => { if (resp.data._beginMatch !== m[1]) resp.ignoreMatch(); }
+    });
+};
+
+var MODES = /*#__PURE__*/Object.freeze({
+  __proto__: null,
+  APOS_STRING_MODE: APOS_STRING_MODE,
+  BACKSLASH_ESCAPE: BACKSLASH_ESCAPE,
+  BINARY_NUMBER_MODE: BINARY_NUMBER_MODE,
+  BINARY_NUMBER_RE: BINARY_NUMBER_RE,
+  COMMENT: COMMENT,
+  C_BLOCK_COMMENT_MODE: C_BLOCK_COMMENT_MODE,
+  C_LINE_COMMENT_MODE: C_LINE_COMMENT_MODE,
+  C_NUMBER_MODE: C_NUMBER_MODE,
+  C_NUMBER_RE: C_NUMBER_RE,
+  END_SAME_AS_BEGIN: END_SAME_AS_BEGIN,
+  HASH_COMMENT_MODE: HASH_COMMENT_MODE,
+  IDENT_RE: IDENT_RE,
+  MATCH_NOTHING_RE: MATCH_NOTHING_RE,
+  METHOD_GUARD: METHOD_GUARD,
+  NUMBER_MODE: NUMBER_MODE,
+  NUMBER_RE: NUMBER_RE,
+  PHRASAL_WORDS_MODE: PHRASAL_WORDS_MODE,
+  QUOTE_STRING_MODE: QUOTE_STRING_MODE,
+  REGEXP_MODE: REGEXP_MODE,
+  RE_STARTERS_RE: RE_STARTERS_RE,
+  SHEBANG: SHEBANG,
+  TITLE_MODE: TITLE_MODE,
+  UNDERSCORE_IDENT_RE: UNDERSCORE_IDENT_RE,
+  UNDERSCORE_TITLE_MODE: UNDERSCORE_TITLE_MODE
+});
+
+/**
+@typedef {import('highlight.js').CallbackResponse} CallbackResponse
+@typedef {import('highlight.js').CompilerExt} CompilerExt
+*/
+
+// Grammar extensions / plugins
+// See: https://github.com/highlightjs/highlight.js/issues/2833
+
+// Grammar extensions allow "syntactic sugar" to be added to the grammar modes
+// without requiring any underlying changes to the compiler internals.
+
+// `compileMatch` being the perfect small example of now allowing a grammar
+// author to write `match` when they desire to match a single expression rather
+// than being forced to use `begin`.  The extension then just moves `match` into
+// `begin` when it runs.  Ie, no features have been added, but we've just made
+// the experience of writing (and reading grammars) a little bit nicer.
+
+// ------
+
+// TODO: We need negative look-behind support to do this properly
+/**
+ * Skip a match if it has a preceding dot
+ *
+ * This is used for `beginKeywords` to prevent matching expressions such as
+ * `bob.keyword.do()`. The mode compiler automatically wires this up as a
+ * special _internal_ 'on:begin' callback for modes with `beginKeywords`
+ * @param {RegExpMatchArray} match
+ * @param {CallbackResponse} response
+ */
+function skipIfHasPrecedingDot(match, response) {
+  const before = match.input[match.index - 1];
+  if (before === ".") {
+    response.ignoreMatch();
+  }
+}
+
+/**
+ *
+ * @type {CompilerExt}
+ */
+function scopeClassName(mode, _parent) {
+  // eslint-disable-next-line no-undefined
+  if (mode.className !== undefined) {
+    mode.scope = mode.className;
+    delete mode.className;
+  }
+}
+
+/**
+ * `beginKeywords` syntactic sugar
+ * @type {CompilerExt}
+ */
+function beginKeywords(mode, parent) {
+  if (!parent) return;
+  if (!mode.beginKeywords) return;
+
+  // for languages with keywords that include non-word characters checking for
+  // a word boundary is not sufficient, so instead we check for a word boundary
+  // or whitespace - this does no harm in any case since our keyword engine
+  // doesn't allow spaces in keywords anyways and we still check for the boundary
+  // first
+  mode.begin = '\\b(' + mode.beginKeywords.split(' ').join('|') + ')(?!\\.)(?=\\b|\\s)';
+  mode.__beforeBegin = skipIfHasPrecedingDot;
+  mode.keywords = mode.keywords || mode.beginKeywords;
+  delete mode.beginKeywords;
+
+  // prevents double relevance, the keywords themselves provide
+  // relevance, the mode doesn't need to double it
+  // eslint-disable-next-line no-undefined
+  if (mode.relevance === undefined) mode.relevance = 0;
+}
+
+/**
+ * Allow `illegal` to contain an array of illegal values
+ * @type {CompilerExt}
+ */
+function compileIllegal(mode, _parent) {
+  if (!Array.isArray(mode.illegal)) return;
+
+  mode.illegal = either(...mode.illegal);
+}
+
+/**
+ * `match` to match a single expression for readability
+ * @type {CompilerExt}
+ */
+function compileMatch(mode, _parent) {
+  if (!mode.match) return;
+  if (mode.begin || mode.end) throw new Error("begin & end are not supported with match");
+
+  mode.begin = mode.match;
+  delete mode.match;
+}
+
+/**
+ * provides the default 1 relevance to all modes
+ * @type {CompilerExt}
+ */
+function compileRelevance(mode, _parent) {
+  // eslint-disable-next-line no-undefined
+  if (mode.relevance === undefined) mode.relevance = 1;
+}
+
+// allow beforeMatch to act as a "qualifier" for the match
+// the full match begin must be [beforeMatch][begin]
+const beforeMatchExt = (mode, parent) => {
+  if (!mode.beforeMatch) return;
+  // starts conflicts with endsParent which we need to make sure the child
+  // rule is not matched multiple times
+  if (mode.starts) throw new Error("beforeMatch cannot be used with starts");
+
+  const originalMode = Object.assign({}, mode);
+  Object.keys(mode).forEach((key) => { delete mode[key]; });
+
+  mode.keywords = originalMode.keywords;
+  mode.begin = concat(originalMode.beforeMatch, lookahead(originalMode.begin));
+  mode.starts = {
+    relevance: 0,
+    contains: [
+      Object.assign(originalMode, { endsParent: true })
+    ]
+  };
+  mode.relevance = 0;
+
+  delete originalMode.beforeMatch;
+};
+
+// keywords that should have no default relevance value
+const COMMON_KEYWORDS = [
+  'of',
+  'and',
+  'for',
+  'in',
+  'not',
+  'or',
+  'if',
+  'then',
+  'parent', // common variable name
+  'list', // common variable name
+  'value' // common variable name
+];
+
+const DEFAULT_KEYWORD_SCOPE = "keyword";
+
+/**
+ * Given raw keywords from a language definition, compile them.
+ *
+ * @param {string | Record<string,string|string[]> | Array<string>} rawKeywords
+ * @param {boolean} caseInsensitive
+ */
+function compileKeywords(rawKeywords, caseInsensitive, scopeName = DEFAULT_KEYWORD_SCOPE) {
+  /** @type {import("highlight.js/private").KeywordDict} */
+  const compiledKeywords = Object.create(null);
+
+  // input can be a string of keywords, an array of keywords, or a object with
+  // named keys representing scopeName (which can then point to a string or array)
+  if (typeof rawKeywords === 'string') {
+    compileList(scopeName, rawKeywords.split(" "));
+  } else if (Array.isArray(rawKeywords)) {
+    compileList(scopeName, rawKeywords);
+  } else {
+    Object.keys(rawKeywords).forEach(function(scopeName) {
+      // collapse all our objects back into the parent object
+      Object.assign(
+        compiledKeywords,
+        compileKeywords(rawKeywords[scopeName], caseInsensitive, scopeName)
+      );
+    });
+  }
+  return compiledKeywords;
+
+  // ---
+
+  /**
+   * Compiles an individual list of keywords
+   *
+   * Ex: "for if when while|5"
+   *
+   * @param {string} scopeName
+   * @param {Array<string>} keywordList
+   */
+  function compileList(scopeName, keywordList) {
+    if (caseInsensitive) {
+      keywordList = keywordList.map(x => x.toLowerCase());
+    }
+    keywordList.forEach(function(keyword) {
+      const pair = keyword.split('|');
+      compiledKeywords[pair[0]] = [scopeName, scoreForKeyword(pair[0], pair[1])];
+    });
+  }
+}
+
+/**
+ * Returns the proper score for a given keyword
+ *
+ * Also takes into account comment keywords, which will be scored 0 UNLESS
+ * another score has been manually assigned.
+ * @param {string} keyword
+ * @param {string} [providedScore]
+ */
+function scoreForKeyword(keyword, providedScore) {
+  // manual scores always win over common keywords
+  // so you can force a score of 1 if you really insist
+  if (providedScore) {
+    return Number(providedScore);
+  }
+
+  return commonKeyword(keyword) ? 0 : 1;
+}
+
+/**
+ * Determines if a given keyword is common or not
+ *
+ * @param {string} keyword */
+function commonKeyword(keyword) {
+  return COMMON_KEYWORDS.includes(keyword.toLowerCase());
+}
+
+/*
+
+For the reasoning behind this please see:
+https://github.com/highlightjs/highlight.js/issues/2880#issuecomment-747275419
+
+*/
+
+/**
+ * @type {Record<string, boolean>}
+ */
+const seenDeprecations = {};
+
+/**
+ * @param {string} message
+ */
+const error = (message) => {
+  console.error(message);
+};
+
+/**
+ * @param {string} message
+ * @param {any} args
+ */
+const warn = (message, ...args) => {
+  console.log(`WARN: ${message}`, ...args);
+};
+
+/**
+ * @param {string} version
+ * @param {string} message
+ */
+const deprecated = (version, message) => {
+  if (seenDeprecations[`${version}/${message}`]) return;
+
+  console.log(`Deprecated as of ${version}. ${message}`);
+  seenDeprecations[`${version}/${message}`] = true;
+};
+
+/* eslint-disable no-throw-literal */
+
+/**
+@typedef {import('highlight.js').CompiledMode} CompiledMode
+*/
+
+const MultiClassError = new Error();
+
+/**
+ * Renumbers labeled scope names to account for additional inner match
+ * groups that otherwise would break everything.
+ *
+ * Lets say we 3 match scopes:
+ *
+ *   { 1 => ..., 2 => ..., 3 => ... }
+ *
+ * So what we need is a clean match like this:
+ *
+ *   (a)(b)(c) => [ "a", "b", "c" ]
+ *
+ * But this falls apart with inner match groups:
+ *
+ * (a)(((b)))(c) => ["a", "b", "b", "b", "c" ]
+ *
+ * Our scopes are now "out of alignment" and we're repeating `b` 3 times.
+ * What needs to happen is the numbers are remapped:
+ *
+ *   { 1 => ..., 2 => ..., 5 => ... }
+ *
+ * We also need to know that the ONLY groups that should be output
+ * are 1, 2, and 5.  This function handles this behavior.
+ *
+ * @param {CompiledMode} mode
+ * @param {Array<RegExp | string>} regexes
+ * @param {{key: "beginScope"|"endScope"}} opts
+ */
+function remapScopeNames(mode, regexes, { key }) {
+  let offset = 0;
+  const scopeNames = mode[key];
+  /** @type Record<number,boolean> */
+  const emit = {};
+  /** @type Record<number,string> */
+  const positions = {};
+
+  for (let i = 1; i <= regexes.length; i++) {
+    positions[i + offset] = scopeNames[i];
+    emit[i + offset] = true;
+    offset += countMatchGroups(regexes[i - 1]);
+  }
+  // we use _emit to keep track of which match groups are "top-level" to avoid double
+  // output from inside match groups
+  mode[key] = positions;
+  mode[key]._emit = emit;
+  mode[key]._multi = true;
+}
+
+/**
+ * @param {CompiledMode} mode
+ */
+function beginMultiClass(mode) {
+  if (!Array.isArray(mode.begin)) return;
+
+  if (mode.skip || mode.excludeBegin || mode.returnBegin) {
+    error("skip, excludeBegin, returnBegin not compatible with beginScope: {}");
+    throw MultiClassError;
+  }
+
+  if (typeof mode.beginScope !== "object" || mode.beginScope === null) {
+    error("beginScope must be object");
+    throw MultiClassError;
+  }
+
+  remapScopeNames(mode, mode.begin, { key: "beginScope" });
+  mode.begin = _rewriteBackreferences(mode.begin, { joinWith: "" });
+}
+
+/**
+ * @param {CompiledMode} mode
+ */
+function endMultiClass(mode) {
+  if (!Array.isArray(mode.end)) return;
+
+  if (mode.skip || mode.excludeEnd || mode.returnEnd) {
+    error("skip, excludeEnd, returnEnd not compatible with endScope: {}");
+    throw MultiClassError;
+  }
+
+  if (typeof mode.endScope !== "object" || mode.endScope === null) {
+    error("endScope must be object");
+    throw MultiClassError;
+  }
+
+  remapScopeNames(mode, mode.end, { key: "endScope" });
+  mode.end = _rewriteBackreferences(mode.end, { joinWith: "" });
+}
+
+/**
+ * this exists only to allow `scope: {}` to be used beside `match:`
+ * Otherwise `beginScope` would necessary and that would look weird
+
+  {
+    match: [ /def/, /\w+/ ]
+    scope: { 1: "keyword" , 2: "title" }
+  }
+
+ * @param {CompiledMode} mode
+ */
+function scopeSugar(mode) {
+  if (mode.scope && typeof mode.scope === "object" && mode.scope !== null) {
+    mode.beginScope = mode.scope;
+    delete mode.scope;
+  }
+}
+
+/**
+ * @param {CompiledMode} mode
+ */
+function MultiClass(mode) {
+  scopeSugar(mode);
+
+  if (typeof mode.beginScope === "string") {
+    mode.beginScope = { _wrap: mode.beginScope };
+  }
+  if (typeof mode.endScope === "string") {
+    mode.endScope = { _wrap: mode.endScope };
+  }
+
+  beginMultiClass(mode);
+  endMultiClass(mode);
+}
+
+/**
+@typedef {import('highlight.js').Mode} Mode
+@typedef {import('highlight.js').CompiledMode} CompiledMode
+@typedef {import('highlight.js').Language} Language
+@typedef {import('highlight.js').HLJSPlugin} HLJSPlugin
+@typedef {import('highlight.js').CompiledLanguage} CompiledLanguage
+*/
+
+// compilation
+
+/**
+ * Compiles a language definition result
+ *
+ * Given the raw result of a language definition (Language), compiles this so
+ * that it is ready for highlighting code.
+ * @param {Language} language
+ * @returns {CompiledLanguage}
+ */
+function compileLanguage(language) {
+  /**
+   * Builds a regex with the case sensitivity of the current language
+   *
+   * @param {RegExp | string} value
+   * @param {boolean} [global]
+   */
+  function langRe(value, global) {
+    return new RegExp(
+      source(value),
+      'm'
+      + (language.case_insensitive ? 'i' : '')
+      + (language.unicodeRegex ? 'u' : '')
+      + (global ? 'g' : '')
+    );
+  }
+
+  /**
+    Stores multiple regular expressions and allows you to quickly search for
+    them all in a string simultaneously - returning the first match.  It does
+    this by creating a huge (a|b|c) regex - each individual item wrapped with ()
+    and joined by `|` - using match groups to track position.  When a match is
+    found checking which position in the array has content allows us to figure
+    out which of the original regexes / match groups triggered the match.
+
+    The match object itself (the result of `Regex.exec`) is returned but also
+    enhanced by merging in any meta-data that was registered with the regex.
+    This is how we keep track of which mode matched, and what type of rule
+    (`illegal`, `begin`, end, etc).
+  */
+  class MultiRegex {
+    constructor() {
+      this.matchIndexes = {};
+      // @ts-ignore
+      this.regexes = [];
+      this.matchAt = 1;
+      this.position = 0;
+    }
+
+    // @ts-ignore
+    addRule(re, opts) {
+      opts.position = this.position++;
+      // @ts-ignore
+      this.matchIndexes[this.matchAt] = opts;
+      this.regexes.push([opts, re]);
+      this.matchAt += countMatchGroups(re) + 1;
+    }
+
+    compile() {
+      if (this.regexes.length === 0) {
+        // avoids the need to check length every time exec is called
+        // @ts-ignore
+        this.exec = () => null;
+      }
+      const terminators = this.regexes.map(el => el[1]);
+      this.matcherRe = langRe(_rewriteBackreferences(terminators, { joinWith: '|' }), true);
+      this.lastIndex = 0;
+    }
+
+    /** @param {string} s */
+    exec(s) {
+      this.matcherRe.lastIndex = this.lastIndex;
+      const match = this.matcherRe.exec(s);
+      if (!match) { return null; }
+
+      // eslint-disable-next-line no-undefined
+      const i = match.findIndex((el, i) => i > 0 && el !== undefined);
+      // @ts-ignore
+      const matchData = this.matchIndexes[i];
+      // trim off any earlier non-relevant match groups (ie, the other regex
+      // match groups that make up the multi-matcher)
+      match.splice(0, i);
+
+      return Object.assign(match, matchData);
+    }
+  }
+
+  /*
+    Created to solve the key deficiently with MultiRegex - there is no way to
+    test for multiple matches at a single location.  Why would we need to do
+    that?  In the future a more dynamic engine will allow certain matches to be
+    ignored.  An example: if we matched say the 3rd regex in a large group but
+    decided to ignore it - we'd need to started testing again at the 4th
+    regex... but MultiRegex itself gives us no real way to do that.
+
+    So what this class creates MultiRegexs on the fly for whatever search
+    position they are needed.
+
+    NOTE: These additional MultiRegex objects are created dynamically.  For most
+    grammars most of the time we will never actually need anything more than the
+    first MultiRegex - so this shouldn't have too much overhead.
+
+    Say this is our search group, and we match regex3, but wish to ignore it.
+
+      regex1 | regex2 | regex3 | regex4 | regex5    ' ie, startAt = 0
+
+    What we need is a new MultiRegex that only includes the remaining
+    possibilities:
+
+      regex4 | regex5                               ' ie, startAt = 3
+
+    This class wraps all that complexity up in a simple API... `startAt` decides
+    where in the array of expressions to start doing the matching. It
+    auto-increments, so if a match is found at position 2, then startAt will be
+    set to 3.  If the end is reached startAt will return to 0.
+
+    MOST of the time the parser will be setting startAt manually to 0.
+  */
+  class ResumableMultiRegex {
+    constructor() {
+      // @ts-ignore
+      this.rules = [];
+      // @ts-ignore
+      this.multiRegexes = [];
+      this.count = 0;
+
+      this.lastIndex = 0;
+      this.regexIndex = 0;
+    }
+
+    // @ts-ignore
+    getMatcher(index) {
+      if (this.multiRegexes[index]) return this.multiRegexes[index];
+
+      const matcher = new MultiRegex();
+      this.rules.slice(index).forEach(([re, opts]) => matcher.addRule(re, opts));
+      matcher.compile();
+      this.multiRegexes[index] = matcher;
+      return matcher;
+    }
+
+    resumingScanAtSamePosition() {
+      return this.regexIndex !== 0;
+    }
+
+    considerAll() {
+      this.regexIndex = 0;
+    }
+
+    // @ts-ignore
+    addRule(re, opts) {
+      this.rules.push([re, opts]);
+      if (opts.type === "begin") this.count++;
+    }
+
+    /** @param {string} s */
+    exec(s) {
+      const m = this.getMatcher(this.regexIndex);
+      m.lastIndex = this.lastIndex;
+      let result = m.exec(s);
+
+      // The following is because we have no easy way to say "resume scanning at the
+      // existing position but also skip the current rule ONLY". What happens is
+      // all prior rules are also skipped which can result in matching the wrong
+      // thing. Example of matching "booger":
+
+      // our matcher is [string, "booger", number]
+      //
+      // ....booger....
+
+      // if "booger" is ignored then we'd really need a regex to scan from the
+      // SAME position for only: [string, number] but ignoring "booger" (if it
+      // was the first match), a simple resume would scan ahead who knows how
+      // far looking only for "number", ignoring potential string matches (or
+      // future "booger" matches that might be valid.)
+
+      // So what we do: We execute two matchers, one resuming at the same
+      // position, but the second full matcher starting at the position after:
+
+      //     /--- resume first regex match here (for [number])
+      //     |/---- full match here for [string, "booger", number]
+      //     vv
+      // ....booger....
+
+      // Which ever results in a match first is then used. So this 3-4 step
+      // process essentially allows us to say "match at this position, excluding
+      // a prior rule that was ignored".
+      //
+      // 1. Match "booger" first, ignore. Also proves that [string] does non match.
+      // 2. Resume matching for [number]
+      // 3. Match at index + 1 for [string, "booger", number]
+      // 4. If #2 and #3 result in matches, which came first?
+      if (this.resumingScanAtSamePosition()) {
+        if (result && result.index === this.lastIndex) ; else { // use the second matcher result
+          const m2 = this.getMatcher(0);
+          m2.lastIndex = this.lastIndex + 1;
+          result = m2.exec(s);
+        }
+      }
+
+      if (result) {
+        this.regexIndex += result.position + 1;
+        if (this.regexIndex === this.count) {
+          // wrap-around to considering all matches again
+          this.considerAll();
+        }
+      }
+
+      return result;
+    }
+  }
+
+  /**
+   * Given a mode, builds a huge ResumableMultiRegex that can be used to walk
+   * the content and find matches.
+   *
+   * @param {CompiledMode} mode
+   * @returns {ResumableMultiRegex}
+   */
+  function buildModeRegex(mode) {
+    const mm = new ResumableMultiRegex();
+
+    mode.contains.forEach(term => mm.addRule(term.begin, { rule: term, type: "begin" }));
+
+    if (mode.terminatorEnd) {
+      mm.addRule(mode.terminatorEnd, { type: "end" });
+    }
+    if (mode.illegal) {
+      mm.addRule(mode.illegal, { type: "illegal" });
+    }
+
+    return mm;
+  }
+
+  /** skip vs abort vs ignore
+   *
+   * @skip   - The mode is still entered and exited normally (and contains rules apply),
+   *           but all content is held and added to the parent buffer rather than being
+   *           output when the mode ends.  Mostly used with `sublanguage` to build up
+   *           a single large buffer than can be parsed by sublanguage.
+   *
+   *             - The mode begin ands ends normally.
+   *             - Content matched is added to the parent mode buffer.
+   *             - The parser cursor is moved forward normally.
+   *
+   * @abort  - A hack placeholder until we have ignore.  Aborts the mode (as if it
+   *           never matched) but DOES NOT continue to match subsequent `contains`
+   *           modes.  Abort is bad/suboptimal because it can result in modes
+   *           farther down not getting applied because an earlier rule eats the
+   *           content but then aborts.
+   *
+   *             - The mode does not begin.
+   *             - Content matched by `begin` is added to the mode buffer.
+   *             - The parser cursor is moved forward accordingly.
+   *
+   * @ignore - Ignores the mode (as if it never matched) and continues to match any
+   *           subsequent `contains` modes.  Ignore isn't technically possible with
+   *           the current parser implementation.
+   *
+   *             - The mode does not begin.
+   *             - Content matched by `begin` is ignored.
+   *             - The parser cursor is not moved forward.
+   */
+
+  /**
+   * Compiles an individual mode
+   *
+   * This can raise an error if the mode contains certain detectable known logic
+   * issues.
+   * @param {Mode} mode
+   * @param {CompiledMode | null} [parent]
+   * @returns {CompiledMode | never}
+   */
+  function compileMode(mode, parent) {
+    const cmode = /** @type CompiledMode */ (mode);
+    if (mode.isCompiled) return cmode;
+
+    [
+      scopeClassName,
+      // do this early so compiler extensions generally don't have to worry about
+      // the distinction between match/begin
+      compileMatch,
+      MultiClass,
+      beforeMatchExt
+    ].forEach(ext => ext(mode, parent));
+
+    language.compilerExtensions.forEach(ext => ext(mode, parent));
+
+    // __beforeBegin is considered private API, internal use only
+    mode.__beforeBegin = null;
+
+    [
+      beginKeywords,
+      // do this later so compiler extensions that come earlier have access to the
+      // raw array if they wanted to perhaps manipulate it, etc.
+      compileIllegal,
+      // default to 1 relevance if not specified
+      compileRelevance
+    ].forEach(ext => ext(mode, parent));
+
+    mode.isCompiled = true;
+
+    let keywordPattern = null;
+    if (typeof mode.keywords === "object" && mode.keywords.$pattern) {
+      // we need a copy because keywords might be compiled multiple times
+      // so we can't go deleting $pattern from the original on the first
+      // pass
+      mode.keywords = Object.assign({}, mode.keywords);
+      keywordPattern = mode.keywords.$pattern;
+      delete mode.keywords.$pattern;
+    }
+    keywordPattern = keywordPattern || /\w+/;
+
+    if (mode.keywords) {
+      mode.keywords = compileKeywords(mode.keywords, language.case_insensitive);
+    }
+
+    cmode.keywordPatternRe = langRe(keywordPattern, true);
+
+    if (parent) {
+      if (!mode.begin) mode.begin = /\B|\b/;
+      cmode.beginRe = langRe(cmode.begin);
+      if (!mode.end && !mode.endsWithParent) mode.end = /\B|\b/;
+      if (mode.end) cmode.endRe = langRe(cmode.end);
+      cmode.terminatorEnd = source(cmode.end) || '';
+      if (mode.endsWithParent && parent.terminatorEnd) {
+        cmode.terminatorEnd += (mode.end ? '|' : '') + parent.terminatorEnd;
+      }
+    }
+    if (mode.illegal) cmode.illegalRe = langRe(/** @type {RegExp | string} */ (mode.illegal));
+    if (!mode.contains) mode.contains = [];
+
+    mode.contains = [].concat(...mode.contains.map(function(c) {
+      return expandOrCloneMode(c === 'self' ? mode : c);
+    }));
+    mode.contains.forEach(function(c) { compileMode(/** @type Mode */ (c), cmode); });
+
+    if (mode.starts) {
+      compileMode(mode.starts, parent);
+    }
+
+    cmode.matcher = buildModeRegex(cmode);
+    return cmode;
+  }
+
+  if (!language.compilerExtensions) language.compilerExtensions = [];
+
+  // self is not valid at the top-level
+  if (language.contains && language.contains.includes('self')) {
+    throw new Error("ERR: contains `self` is not supported at the top-level of a language.  See documentation.");
+  }
+
+  // we need a null object, which inherit will guarantee
+  language.classNameAliases = inherit$1(language.classNameAliases || {});
+
+  return compileMode(/** @type Mode */ (language));
+}
+
+/**
+ * Determines if a mode has a dependency on it's parent or not
+ *
+ * If a mode does have a parent dependency then often we need to clone it if
+ * it's used in multiple places so that each copy points to the correct parent,
+ * where-as modes without a parent can often safely be re-used at the bottom of
+ * a mode chain.
+ *
+ * @param {Mode | null} mode
+ * @returns {boolean} - is there a dependency on the parent?
+ * */
+function dependencyOnParent(mode) {
+  if (!mode) return false;
+
+  return mode.endsWithParent || dependencyOnParent(mode.starts);
+}
+
+/**
+ * Expands a mode or clones it if necessary
+ *
+ * This is necessary for modes with parental dependenceis (see notes on
+ * `dependencyOnParent`) and for nodes that have `variants` - which must then be
+ * exploded into their own individual modes at compile time.
+ *
+ * @param {Mode} mode
+ * @returns {Mode | Mode[]}
+ * */
+function expandOrCloneMode(mode) {
+  if (mode.variants && !mode.cachedVariants) {
+    mode.cachedVariants = mode.variants.map(function(variant) {
+      return inherit$1(mode, { variants: null }, variant);
+    });
+  }
+
+  // EXPAND
+  // if we have variants then essentially "replace" the mode with the variants
+  // this happens in compileMode, where this function is called from
+  if (mode.cachedVariants) {
+    return mode.cachedVariants;
+  }
+
+  // CLONE
+  // if we have dependencies on parents then we need a unique
+  // instance of ourselves, so we can be reused with many
+  // different parents without issue
+  if (dependencyOnParent(mode)) {
+    return inherit$1(mode, { starts: mode.starts ? inherit$1(mode.starts) : null });
+  }
+
+  if (Object.isFrozen(mode)) {
+    return inherit$1(mode);
+  }
+
+  // no special dependency issues, just return ourselves
+  return mode;
+}
+
+var version = "11.11.1";
+
+class HTMLInjectionError extends Error {
+  constructor(reason, html) {
+    super(reason);
+    this.name = "HTMLInjectionError";
+    this.html = html;
+  }
+}
+
+/*
+Syntax highlighting with language autodetection.
+https://highlightjs.org/
+*/
+
+
+
+/**
+@typedef {import('highlight.js').Mode} Mode
+@typedef {import('highlight.js').CompiledMode} CompiledMode
+@typedef {import('highlight.js').CompiledScope} CompiledScope
+@typedef {import('highlight.js').Language} Language
+@typedef {import('highlight.js').HLJSApi} HLJSApi
+@typedef {import('highlight.js').HLJSPlugin} HLJSPlugin
+@typedef {import('highlight.js').PluginEvent} PluginEvent
+@typedef {import('highlight.js').HLJSOptions} HLJSOptions
+@typedef {import('highlight.js').LanguageFn} LanguageFn
+@typedef {import('highlight.js').HighlightedHTMLElement} HighlightedHTMLElement
+@typedef {import('highlight.js').BeforeHighlightContext} BeforeHighlightContext
+@typedef {import('highlight.js/private').MatchType} MatchType
+@typedef {import('highlight.js/private').KeywordData} KeywordData
+@typedef {import('highlight.js/private').EnhancedMatch} EnhancedMatch
+@typedef {import('highlight.js/private').AnnotatedError} AnnotatedError
+@typedef {import('highlight.js').AutoHighlightResult} AutoHighlightResult
+@typedef {import('highlight.js').HighlightOptions} HighlightOptions
+@typedef {import('highlight.js').HighlightResult} HighlightResult
+*/
+
+
+const escape = escapeHTML;
+const inherit = inherit$1;
+const NO_MATCH = Symbol("nomatch");
+const MAX_KEYWORD_HITS = 7;
+
+/**
+ * @param {any} hljs - object that is extended (legacy)
+ * @returns {HLJSApi}
+ */
+const HLJS = function(hljs) {
+  // Global internal variables used within the highlight.js library.
+  /** @type {Record<string, Language>} */
+  const languages = Object.create(null);
+  /** @type {Record<string, string>} */
+  const aliases = Object.create(null);
+  /** @type {HLJSPlugin[]} */
+  const plugins = [];
+
+  // safe/production mode - swallows more errors, tries to keep running
+  // even if a single syntax or parse hits a fatal error
+  let SAFE_MODE = true;
+  const LANGUAGE_NOT_FOUND = "Could not find the language '{}', did you forget to load/include a language module?";
+  /** @type {Language} */
+  const PLAINTEXT_LANGUAGE = { disableAutodetect: true, name: 'Plain text', contains: [] };
+
+  // Global options used when within external APIs. This is modified when
+  // calling the `hljs.configure` function.
+  /** @type HLJSOptions */
+  let options = {
+    ignoreUnescapedHTML: false,
+    throwUnescapedHTML: false,
+    noHighlightRe: /^(no-?highlight)$/i,
+    languageDetectRe: /\blang(?:uage)?-([\w-]+)\b/i,
+    classPrefix: 'hljs-',
+    cssSelector: 'pre code',
+    languages: null,
+    // beta configuration options, subject to change, welcome to discuss
+    // https://github.com/highlightjs/highlight.js/issues/1086
+    __emitter: TokenTreeEmitter
+  };
+
+  /* Utility functions */
+
+  /**
+   * Tests a language name to see if highlighting should be skipped
+   * @param {string} languageName
+   */
+  function shouldNotHighlight(languageName) {
+    return options.noHighlightRe.test(languageName);
+  }
+
+  /**
+   * @param {HighlightedHTMLElement} block - the HTML element to determine language for
+   */
+  function blockLanguage(block) {
+    let classes = block.className + ' ';
+
+    classes += block.parentNode ? block.parentNode.className : '';
+
+    // language-* takes precedence over non-prefixed class names.
+    const match = options.languageDetectRe.exec(classes);
+    if (match) {
+      const language = getLanguage(match[1]);
+      if (!language) {
+        warn(LANGUAGE_NOT_FOUND.replace("{}", match[1]));
+        warn("Falling back to no-highlight mode for this block.", block);
+      }
+      return language ? match[1] : 'no-highlight';
+    }
+
+    return classes
+      .split(/\s+/)
+      .find((_class) => shouldNotHighlight(_class) || getLanguage(_class));
+  }
+
+  /**
+   * Core highlighting function.
+   *
+   * OLD API
+   * highlight(lang, code, ignoreIllegals, continuation)
+   *
+   * NEW API
+   * highlight(code, {lang, ignoreIllegals})
+   *
+   * @param {string} codeOrLanguageName - the language to use for highlighting
+   * @param {string | HighlightOptions} optionsOrCode - the code to highlight
+   * @param {boolean} [ignoreIllegals] - whether to ignore illegal matches, default is to bail
+   *
+   * @returns {HighlightResult} Result - an object that represents the result
+   * @property {string} language - the language name
+   * @property {number} relevance - the relevance score
+   * @property {string} value - the highlighted HTML code
+   * @property {string} code - the original raw code
+   * @property {CompiledMode} top - top of the current mode stack
+   * @property {boolean} illegal - indicates whether any illegal matches were found
+  */
+  function highlight(codeOrLanguageName, optionsOrCode, ignoreIllegals) {
+    let code = "";
+    let languageName = "";
+    if (typeof optionsOrCode === "object") {
+      code = codeOrLanguageName;
+      ignoreIllegals = optionsOrCode.ignoreIllegals;
+      languageName = optionsOrCode.language;
+    } else {
+      // old API
+      deprecated("10.7.0", "highlight(lang, code, ...args) has been deprecated.");
+      deprecated("10.7.0", "Please use highlight(code, options) instead.\nhttps://github.com/highlightjs/highlight.js/issues/2277");
+      languageName = codeOrLanguageName;
+      code = optionsOrCode;
+    }
+
+    // https://github.com/highlightjs/highlight.js/issues/3149
+    // eslint-disable-next-line no-undefined
+    if (ignoreIllegals === undefined) { ignoreIllegals = true; }
+
+    /** @type {BeforeHighlightContext} */
+    const context = {
+      code,
+      language: languageName
+    };
+    // the plugin can change the desired language or the code to be highlighted
+    // just be changing the object it was passed
+    fire("before:highlight", context);
+
+    // a before plugin can usurp the result completely by providing it's own
+    // in which case we don't even need to call highlight
+    const result = context.result
+      ? context.result
+      : _highlight(context.language, context.code, ignoreIllegals);
+
+    result.code = context.code;
+    // the plugin can change anything in result to suite it
+    fire("after:highlight", result);
+
+    return result;
+  }
+
+  /**
+   * private highlight that's used internally and does not fire callbacks
+   *
+   * @param {string} languageName - the language to use for highlighting
+   * @param {string} codeToHighlight - the code to highlight
+   * @param {boolean?} [ignoreIllegals] - whether to ignore illegal matches, default is to bail
+   * @param {CompiledMode?} [continuation] - current continuation mode, if any
+   * @returns {HighlightResult} - result of the highlight operation
+  */
+  function _highlight(languageName, codeToHighlight, ignoreIllegals, continuation) {
+    const keywordHits = Object.create(null);
+
+    /**
+     * Return keyword data if a match is a keyword
+     * @param {CompiledMode} mode - current mode
+     * @param {string} matchText - the textual match
+     * @returns {KeywordData | false}
+     */
+    function keywordData(mode, matchText) {
+      return mode.keywords[matchText];
+    }
+
+    function processKeywords() {
+      if (!top.keywords) {
+        emitter.addText(modeBuffer);
+        return;
+      }
+
+      let lastIndex = 0;
+      top.keywordPatternRe.lastIndex = 0;
+      let match = top.keywordPatternRe.exec(modeBuffer);
+      let buf = "";
+
+      while (match) {
+        buf += modeBuffer.substring(lastIndex, match.index);
+        const word = language.case_insensitive ? match[0].toLowerCase() : match[0];
+        const data = keywordData(top, word);
+        if (data) {
+          const [kind, keywordRelevance] = data;
+          emitter.addText(buf);
+          buf = "";
+
+          keywordHits[word] = (keywordHits[word] || 0) + 1;
+          if (keywordHits[word] <= MAX_KEYWORD_HITS) relevance += keywordRelevance;
+          if (kind.startsWith("_")) {
+            // _ implied for relevance only, do not highlight
+            // by applying a class name
+            buf += match[0];
+          } else {
+            const cssClass = language.classNameAliases[kind] || kind;
+            emitKeyword(match[0], cssClass);
+          }
+        } else {
+          buf += match[0];
+        }
+        lastIndex = top.keywordPatternRe.lastIndex;
+        match = top.keywordPatternRe.exec(modeBuffer);
+      }
+      buf += modeBuffer.substring(lastIndex);
+      emitter.addText(buf);
+    }
+
+    function processSubLanguage() {
+      if (modeBuffer === "") return;
+      /** @type HighlightResult */
+      let result = null;
+
+      if (typeof top.subLanguage === 'string') {
+        if (!languages[top.subLanguage]) {
+          emitter.addText(modeBuffer);
+          return;
+        }
+        result = _highlight(top.subLanguage, modeBuffer, true, continuations[top.subLanguage]);
+        continuations[top.subLanguage] = /** @type {CompiledMode} */ (result._top);
+      } else {
+        result = highlightAuto(modeBuffer, top.subLanguage.length ? top.subLanguage : null);
+      }
+
+      // Counting embedded language score towards the host language may be disabled
+      // with zeroing the containing mode relevance. Use case in point is Markdown that
+      // allows XML everywhere and makes every XML snippet to have a much larger Markdown
+      // score.
+      if (top.relevance > 0) {
+        relevance += result.relevance;
+      }
+      emitter.__addSublanguage(result._emitter, result.language);
+    }
+
+    function processBuffer() {
+      if (top.subLanguage != null) {
+        processSubLanguage();
+      } else {
+        processKeywords();
+      }
+      modeBuffer = '';
+    }
+
+    /**
+     * @param {string} text
+     * @param {string} scope
+     */
+    function emitKeyword(keyword, scope) {
+      if (keyword === "") return;
+
+      emitter.startScope(scope);
+      emitter.addText(keyword);
+      emitter.endScope();
+    }
+
+    /**
+     * @param {CompiledScope} scope
+     * @param {RegExpMatchArray} match
+     */
+    function emitMultiClass(scope, match) {
+      let i = 1;
+      const max = match.length - 1;
+      while (i <= max) {
+        if (!scope._emit[i]) { i++; continue; }
+        const klass = language.classNameAliases[scope[i]] || scope[i];
+        const text = match[i];
+        if (klass) {
+          emitKeyword(text, klass);
+        } else {
+          modeBuffer = text;
+          processKeywords();
+          modeBuffer = "";
+        }
+        i++;
+      }
+    }
+
+    /**
+     * @param {CompiledMode} mode - new mode to start
+     * @param {RegExpMatchArray} match
+     */
+    function startNewMode(mode, match) {
+      if (mode.scope && typeof mode.scope === "string") {
+        emitter.openNode(language.classNameAliases[mode.scope] || mode.scope);
+      }
+      if (mode.beginScope) {
+        // beginScope just wraps the begin match itself in a scope
+        if (mode.beginScope._wrap) {
+          emitKeyword(modeBuffer, language.classNameAliases[mode.beginScope._wrap] || mode.beginScope._wrap);
+          modeBuffer = "";
+        } else if (mode.beginScope._multi) {
+          // at this point modeBuffer should just be the match
+          emitMultiClass(mode.beginScope, match);
+          modeBuffer = "";
+        }
+      }
+
+      top = Object.create(mode, { parent: { value: top } });
+      return top;
+    }
+
+    /**
+     * @param {CompiledMode } mode - the mode to potentially end
+     * @param {RegExpMatchArray} match - the latest match
+     * @param {string} matchPlusRemainder - match plus remainder of content
+     * @returns {CompiledMode | void} - the next mode, or if void continue on in current mode
+     */
+    function endOfMode(mode, match, matchPlusRemainder) {
+      let matched = startsWith(mode.endRe, matchPlusRemainder);
+
+      if (matched) {
+        if (mode["on:end"]) {
+          const resp = new Response(mode);
+          mode["on:end"](match, resp);
+          if (resp.isMatchIgnored) matched = false;
+        }
+
+        if (matched) {
+          while (mode.endsParent && mode.parent) {
+            mode = mode.parent;
+          }
+          return mode;
+        }
+      }
+      // even if on:end fires an `ignore` it's still possible
+      // that we might trigger the end node because of a parent mode
+      if (mode.endsWithParent) {
+        return endOfMode(mode.parent, match, matchPlusRemainder);
+      }
+    }
+
+    /**
+     * Handle matching but then ignoring a sequence of text
+     *
+     * @param {string} lexeme - string containing full match text
+     */
+    function doIgnore(lexeme) {
+      if (top.matcher.regexIndex === 0) {
+        // no more regexes to potentially match here, so we move the cursor forward one
+        // space
+        modeBuffer += lexeme[0];
+        return 1;
+      } else {
+        // no need to move the cursor, we still have additional regexes to try and
+        // match at this very spot
+        resumeScanAtSamePosition = true;
+        return 0;
+      }
+    }
+
+    /**
+     * Handle the start of a new potential mode match
+     *
+     * @param {EnhancedMatch} match - the current match
+     * @returns {number} how far to advance the parse cursor
+     */
+    function doBeginMatch(match) {
+      const lexeme = match[0];
+      const newMode = match.rule;
+
+      const resp = new Response(newMode);
+      // first internal before callbacks, then the public ones
+      const beforeCallbacks = [newMode.__beforeBegin, newMode["on:begin"]];
+      for (const cb of beforeCallbacks) {
+        if (!cb) continue;
+        cb(match, resp);
+        if (resp.isMatchIgnored) return doIgnore(lexeme);
+      }
+
+      if (newMode.skip) {
+        modeBuffer += lexeme;
+      } else {
+        if (newMode.excludeBegin) {
+          modeBuffer += lexeme;
+        }
+        processBuffer();
+        if (!newMode.returnBegin && !newMode.excludeBegin) {
+          modeBuffer = lexeme;
+        }
+      }
+      startNewMode(newMode, match);
+      return newMode.returnBegin ? 0 : lexeme.length;
+    }
+
+    /**
+     * Handle the potential end of mode
+     *
+     * @param {RegExpMatchArray} match - the current match
+     */
+    function doEndMatch(match) {
+      const lexeme = match[0];
+      const matchPlusRemainder = codeToHighlight.substring(match.index);
+
+      const endMode = endOfMode(top, match, matchPlusRemainder);
+      if (!endMode) { return NO_MATCH; }
+
+      const origin = top;
+      if (top.endScope && top.endScope._wrap) {
+        processBuffer();
+        emitKeyword(lexeme, top.endScope._wrap);
+      } else if (top.endScope && top.endScope._multi) {
+        processBuffer();
+        emitMultiClass(top.endScope, match);
+      } else if (origin.skip) {
+        modeBuffer += lexeme;
+      } else {
+        if (!(origin.returnEnd || origin.excludeEnd)) {
+          modeBuffer += lexeme;
+        }
+        processBuffer();
+        if (origin.excludeEnd) {
+          modeBuffer = lexeme;
+        }
+      }
+      do {
+        if (top.scope) {
+          emitter.closeNode();
+        }
+        if (!top.skip && !top.subLanguage) {
+          relevance += top.relevance;
+        }
+        top = top.parent;
+      } while (top !== endMode.parent);
+      if (endMode.starts) {
+        startNewMode(endMode.starts, match);
+      }
+      return origin.returnEnd ? 0 : lexeme.length;
+    }
+
+    function processContinuations() {
+      const list = [];
+      for (let current = top; current !== language; current = current.parent) {
+        if (current.scope) {
+          list.unshift(current.scope);
+        }
+      }
+      list.forEach(item => emitter.openNode(item));
+    }
+
+    /** @type {{type?: MatchType, index?: number, rule?: Mode}}} */
+    let lastMatch = {};
+
+    /**
+     *  Process an individual match
+     *
+     * @param {string} textBeforeMatch - text preceding the match (since the last match)
+     * @param {EnhancedMatch} [match] - the match itself
+     */
+    function processLexeme(textBeforeMatch, match) {
+      const lexeme = match && match[0];
+
+      // add non-matched text to the current mode buffer
+      modeBuffer += textBeforeMatch;
+
+      if (lexeme == null) {
+        processBuffer();
+        return 0;
+      }
+
+      // we've found a 0 width match and we're stuck, so we need to advance
+      // this happens when we have badly behaved rules that have optional matchers to the degree that
+      // sometimes they can end up matching nothing at all
+      // Ref: https://github.com/highlightjs/highlight.js/issues/2140
+      if (lastMatch.type === "begin" && match.type === "end" && lastMatch.index === match.index && lexeme === "") {
+        // spit the "skipped" character that our regex choked on back into the output sequence
+        modeBuffer += codeToHighlight.slice(match.index, match.index + 1);
+        if (!SAFE_MODE) {
+          /** @type {AnnotatedError} */
+          const err = new Error(`0 width match regex (${languageName})`);
+          err.languageName = languageName;
+          err.badRule = lastMatch.rule;
+          throw err;
+        }
+        return 1;
+      }
+      lastMatch = match;
+
+      if (match.type === "begin") {
+        return doBeginMatch(match);
+      } else if (match.type === "illegal" && !ignoreIllegals) {
+        // illegal match, we do not continue processing
+        /** @type {AnnotatedError} */
+        const err = new Error('Illegal lexeme "' + lexeme + '" for mode "' + (top.scope || '<unnamed>') + '"');
+        err.mode = top;
+        throw err;
+      } else if (match.type === "end") {
+        const processed = doEndMatch(match);
+        if (processed !== NO_MATCH) {
+          return processed;
+        }
+      }
+
+      // edge case for when illegal matches $ (end of line) which is technically
+      // a 0 width match but not a begin/end match so it's not caught by the
+      // first handler (when ignoreIllegals is true)
+      if (match.type === "illegal" && lexeme === "") {
+        // advance so we aren't stuck in an infinite loop
+        modeBuffer += "\n";
+        return 1;
+      }
+
+      // infinite loops are BAD, this is a last ditch catch all. if we have a
+      // decent number of iterations yet our index (cursor position in our
+      // parsing) still 3x behind our index then something is very wrong
+      // so we bail
+      if (iterations > 100000 && iterations > match.index * 3) {
+        const err = new Error('potential infinite loop, way more iterations than matches');
+        throw err;
+      }
+
+      /*
+      Why might be find ourselves here?  An potential end match that was
+      triggered but could not be completed.  IE, `doEndMatch` returned NO_MATCH.
+      (this could be because a callback requests the match be ignored, etc)
+
+      This causes no real harm other than stopping a few times too many.
+      */
+
+      modeBuffer += lexeme;
+      return lexeme.length;
+    }
+
+    const language = getLanguage(languageName);
+    if (!language) {
+      error(LANGUAGE_NOT_FOUND.replace("{}", languageName));
+      throw new Error('Unknown language: "' + languageName + '"');
+    }
+
+    const md = compileLanguage(language);
+    let result = '';
+    /** @type {CompiledMode} */
+    let top = continuation || md;
+    /** @type Record<string,CompiledMode> */
+    const continuations = {}; // keep continuations for sub-languages
+    const emitter = new options.__emitter(options);
+    processContinuations();
+    let modeBuffer = '';
+    let relevance = 0;
+    let index = 0;
+    let iterations = 0;
+    let resumeScanAtSamePosition = false;
+
+    try {
+      if (!language.__emitTokens) {
+        top.matcher.considerAll();
+
+        for (;;) {
+          iterations++;
+          if (resumeScanAtSamePosition) {
+            // only regexes not matched previously will now be
+            // considered for a potential match
+            resumeScanAtSamePosition = false;
+          } else {
+            top.matcher.considerAll();
+          }
+          top.matcher.lastIndex = index;
+
+          const match = top.matcher.exec(codeToHighlight);
+          // console.log("match", match[0], match.rule && match.rule.begin)
+
+          if (!match) break;
+
+          const beforeMatch = codeToHighlight.substring(index, match.index);
+          const processedCount = processLexeme(beforeMatch, match);
+          index = match.index + processedCount;
+        }
+        processLexeme(codeToHighlight.substring(index));
+      } else {
+        language.__emitTokens(codeToHighlight, emitter);
+      }
+
+      emitter.finalize();
+      result = emitter.toHTML();
+
+      return {
+        language: languageName,
+        value: result,
+        relevance,
+        illegal: false,
+        _emitter: emitter,
+        _top: top
+      };
+    } catch (err) {
+      if (err.message && err.message.includes('Illegal')) {
+        return {
+          language: languageName,
+          value: escape(codeToHighlight),
+          illegal: true,
+          relevance: 0,
+          _illegalBy: {
+            message: err.message,
+            index,
+            context: codeToHighlight.slice(index - 100, index + 100),
+            mode: err.mode,
+            resultSoFar: result
+          },
+          _emitter: emitter
+        };
+      } else if (SAFE_MODE) {
+        return {
+          language: languageName,
+          value: escape(codeToHighlight),
+          illegal: false,
+          relevance: 0,
+          errorRaised: err,
+          _emitter: emitter,
+          _top: top
+        };
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  /**
+   * returns a valid highlight result, without actually doing any actual work,
+   * auto highlight starts with this and it's possible for small snippets that
+   * auto-detection may not find a better match
+   * @param {string} code
+   * @returns {HighlightResult}
+   */
+  function justTextHighlightResult(code) {
+    const result = {
+      value: escape(code),
+      illegal: false,
+      relevance: 0,
+      _top: PLAINTEXT_LANGUAGE,
+      _emitter: new options.__emitter(options)
+    };
+    result._emitter.addText(code);
+    return result;
+  }
+
+  /**
+  Highlighting with language detection. Accepts a string with the code to
+  highlight. Returns an object with the following properties:
+
+  - language (detected language)
+  - relevance (int)
+  - value (an HTML string with highlighting markup)
+  - secondBest (object with the same structure for second-best heuristically
+    detected language, may be absent)
+
+    @param {string} code
+    @param {Array<string>} [languageSubset]
+    @returns {AutoHighlightResult}
+  */
+  function highlightAuto(code, languageSubset) {
+    languageSubset = languageSubset || options.languages || Object.keys(languages);
+    const plaintext = justTextHighlightResult(code);
+
+    const results = languageSubset.filter(getLanguage).filter(autoDetection).map(name =>
+      _highlight(name, code, false)
+    );
+    results.unshift(plaintext); // plaintext is always an option
+
+    const sorted = results.sort((a, b) => {
+      // sort base on relevance
+      if (a.relevance !== b.relevance) return b.relevance - a.relevance;
+
+      // always award the tie to the base language
+      // ie if C++ and Arduino are tied, it's more likely to be C++
+      if (a.language && b.language) {
+        if (getLanguage(a.language).supersetOf === b.language) {
+          return 1;
+        } else if (getLanguage(b.language).supersetOf === a.language) {
+          return -1;
+        }
+      }
+
+      // otherwise say they are equal, which has the effect of sorting on
+      // relevance while preserving the original ordering - which is how ties
+      // have historically been settled, ie the language that comes first always
+      // wins in the case of a tie
+      return 0;
+    });
+
+    const [best, secondBest] = sorted;
+
+    /** @type {AutoHighlightResult} */
+    const result = best;
+    result.secondBest = secondBest;
+
+    return result;
+  }
+
+  /**
+   * Builds new class name for block given the language name
+   *
+   * @param {HTMLElement} element
+   * @param {string} [currentLang]
+   * @param {string} [resultLang]
+   */
+  function updateClassName(element, currentLang, resultLang) {
+    const language = (currentLang && aliases[currentLang]) || resultLang;
+
+    element.classList.add("hljs");
+    element.classList.add(`language-${language}`);
+  }
+
+  /**
+   * Applies highlighting to a DOM node containing code.
+   *
+   * @param {HighlightedHTMLElement} element - the HTML element to highlight
+  */
+  function highlightElement(element) {
+    /** @type HTMLElement */
+    let node = null;
+    const language = blockLanguage(element);
+
+    if (shouldNotHighlight(language)) return;
+
+    fire("before:highlightElement",
+      { el: element, language });
+
+    if (element.dataset.highlighted) {
+      console.log("Element previously highlighted. To highlight again, first unset `dataset.highlighted`.", element);
+      return;
+    }
+
+    // we should be all text, no child nodes (unescaped HTML) - this is possibly
+    // an HTML injection attack - it's likely too late if this is already in
+    // production (the code has likely already done its damage by the time
+    // we're seeing it)... but we yell loudly about this so that hopefully it's
+    // more likely to be caught in development before making it to production
+    if (element.children.length > 0) {
+      if (!options.ignoreUnescapedHTML) {
+        console.warn("One of your code blocks includes unescaped HTML. This is a potentially serious security risk.");
+        console.warn("https://github.com/highlightjs/highlight.js/wiki/security");
+        console.warn("The element with unescaped HTML:");
+        console.warn(element);
+      }
+      if (options.throwUnescapedHTML) {
+        const err = new HTMLInjectionError(
+          "One of your code blocks includes unescaped HTML.",
+          element.innerHTML
+        );
+        throw err;
+      }
+    }
+
+    node = element;
+    const text = node.textContent;
+    const result = language ? highlight(text, { language, ignoreIllegals: true }) : highlightAuto(text);
+
+    element.innerHTML = result.value;
+    element.dataset.highlighted = "yes";
+    updateClassName(element, language, result.language);
+    element.result = {
+      language: result.language,
+      // TODO: remove with version 11.0
+      re: result.relevance,
+      relevance: result.relevance
+    };
+    if (result.secondBest) {
+      element.secondBest = {
+        language: result.secondBest.language,
+        relevance: result.secondBest.relevance
+      };
+    }
+
+    fire("after:highlightElement", { el: element, result, text });
+  }
+
+  /**
+   * Updates highlight.js global options with the passed options
+   *
+   * @param {Partial<HLJSOptions>} userOptions
+   */
+  function configure(userOptions) {
+    options = inherit(options, userOptions);
+  }
+
+  // TODO: remove v12, deprecated
+  const initHighlighting = () => {
+    highlightAll();
+    deprecated("10.6.0", "initHighlighting() deprecated.  Use highlightAll() now.");
+  };
+
+  // TODO: remove v12, deprecated
+  function initHighlightingOnLoad() {
+    highlightAll();
+    deprecated("10.6.0", "initHighlightingOnLoad() deprecated.  Use highlightAll() now.");
+  }
+
+  let wantsHighlight = false;
+
+  /**
+   * auto-highlights all pre>code elements on the page
+   */
+  function highlightAll() {
+    function boot() {
+      // if a highlight was requested before DOM was loaded, do now
+      highlightAll();
+    }
+
+    // if we are called too early in the loading process
+    if (document.readyState === "loading") {
+      // make sure the event listener is only added once
+      if (!wantsHighlight) {
+        window.addEventListener('DOMContentLoaded', boot, false);
+      }
+      wantsHighlight = true;
+      return;
+    }
+
+    const blocks = document.querySelectorAll(options.cssSelector);
+    blocks.forEach(highlightElement);
+  }
+
+  /**
+   * Register a language grammar module
+   *
+   * @param {string} languageName
+   * @param {LanguageFn} languageDefinition
+   */
+  function registerLanguage(languageName, languageDefinition) {
+    let lang = null;
+    try {
+      lang = languageDefinition(hljs);
+    } catch (error$1) {
+      error("Language definition for '{}' could not be registered.".replace("{}", languageName));
+      // hard or soft error
+      if (!SAFE_MODE) { throw error$1; } else { error(error$1); }
+      // languages that have serious errors are replaced with essentially a
+      // "plaintext" stand-in so that the code blocks will still get normal
+      // css classes applied to them - and one bad language won't break the
+      // entire highlighter
+      lang = PLAINTEXT_LANGUAGE;
+    }
+    // give it a temporary name if it doesn't have one in the meta-data
+    if (!lang.name) lang.name = languageName;
+    languages[languageName] = lang;
+    lang.rawDefinition = languageDefinition.bind(null, hljs);
+
+    if (lang.aliases) {
+      registerAliases(lang.aliases, { languageName });
+    }
+  }
+
+  /**
+   * Remove a language grammar module
+   *
+   * @param {string} languageName
+   */
+  function unregisterLanguage(languageName) {
+    delete languages[languageName];
+    for (const alias of Object.keys(aliases)) {
+      if (aliases[alias] === languageName) {
+        delete aliases[alias];
+      }
+    }
+  }
+
+  /**
+   * @returns {string[]} List of language internal names
+   */
+  function listLanguages() {
+    return Object.keys(languages);
+  }
+
+  /**
+   * @param {string} name - name of the language to retrieve
+   * @returns {Language | undefined}
+   */
+  function getLanguage(name) {
+    name = (name || '').toLowerCase();
+    return languages[name] || languages[aliases[name]];
+  }
+
+  /**
+   *
+   * @param {string|string[]} aliasList - single alias or list of aliases
+   * @param {{languageName: string}} opts
+   */
+  function registerAliases(aliasList, { languageName }) {
+    if (typeof aliasList === 'string') {
+      aliasList = [aliasList];
+    }
+    aliasList.forEach(alias => { aliases[alias.toLowerCase()] = languageName; });
+  }
+
+  /**
+   * Determines if a given language has auto-detection enabled
+   * @param {string} name - name of the language
+   */
+  function autoDetection(name) {
+    const lang = getLanguage(name);
+    return lang && !lang.disableAutodetect;
+  }
+
+  /**
+   * Upgrades the old highlightBlock plugins to the new
+   * highlightElement API
+   * @param {HLJSPlugin} plugin
+   */
+  function upgradePluginAPI(plugin) {
+    // TODO: remove with v12
+    if (plugin["before:highlightBlock"] && !plugin["before:highlightElement"]) {
+      plugin["before:highlightElement"] = (data) => {
+        plugin["before:highlightBlock"](
+          Object.assign({ block: data.el }, data)
+        );
+      };
+    }
+    if (plugin["after:highlightBlock"] && !plugin["after:highlightElement"]) {
+      plugin["after:highlightElement"] = (data) => {
+        plugin["after:highlightBlock"](
+          Object.assign({ block: data.el }, data)
+        );
+      };
+    }
+  }
+
+  /**
+   * @param {HLJSPlugin} plugin
+   */
+  function addPlugin(plugin) {
+    upgradePluginAPI(plugin);
+    plugins.push(plugin);
+  }
+
+  /**
+   * @param {HLJSPlugin} plugin
+   */
+  function removePlugin(plugin) {
+    const index = plugins.indexOf(plugin);
+    if (index !== -1) {
+      plugins.splice(index, 1);
+    }
+  }
+
+  /**
+   *
+   * @param {PluginEvent} event
+   * @param {any} args
+   */
+  function fire(event, args) {
+    const cb = event;
+    plugins.forEach(function(plugin) {
+      if (plugin[cb]) {
+        plugin[cb](args);
+      }
+    });
+  }
+
+  /**
+   * DEPRECATED
+   * @param {HighlightedHTMLElement} el
+   */
+  function deprecateHighlightBlock(el) {
+    deprecated("10.7.0", "highlightBlock will be removed entirely in v12.0");
+    deprecated("10.7.0", "Please use highlightElement now.");
+
+    return highlightElement(el);
+  }
+
+  /* Interface definition */
+  Object.assign(hljs, {
+    highlight,
+    highlightAuto,
+    highlightAll,
+    highlightElement,
+    // TODO: Remove with v12 API
+    highlightBlock: deprecateHighlightBlock,
+    configure,
+    initHighlighting,
+    initHighlightingOnLoad,
+    registerLanguage,
+    unregisterLanguage,
+    listLanguages,
+    getLanguage,
+    registerAliases,
+    autoDetection,
+    inherit,
+    addPlugin,
+    removePlugin
+  });
+
+  hljs.debugMode = function() { SAFE_MODE = false; };
+  hljs.safeMode = function() { SAFE_MODE = true; };
+  hljs.versionString = version;
+
+  hljs.regex = {
+    concat: concat,
+    lookahead: lookahead,
+    either: either,
+    optional: optional,
+    anyNumberOfTimes: anyNumberOfTimes
+  };
+
+  for (const key in MODES) {
+    // @ts-ignore
+    if (typeof MODES[key] === "object") {
+      // @ts-ignore
+      deepFreeze(MODES[key]);
+    }
+  }
+
+  // merge all the modes/regexes into our main object
+  Object.assign(hljs, MODES);
+
+  return hljs;
+};
+
+// Other names for the variable may break build script
+const highlight = HLJS({});
+
+// returns a new instance of the highlighter to be used for extensions
+// check https://github.com/wooorm/lowlight/issues/47
+highlight.newInstance = () => HLJS({});
+
+module.exports = highlight;
+highlight.HighlightJS = highlight;
+highlight.default = highlight;
+
+
+/***/ }),
+
+/***/ 2573:
+/***/ ((module) => {
+
+/*
+Language: HTML, XML
+Website: https://www.w3.org/XML/
+Category: common, web
+Audit: 2020
+*/
+
+/** @type LanguageFn */
+function xml(hljs) {
+  const regex = hljs.regex;
+  // XML names can have the following additional letters: https://www.w3.org/TR/xml/#NT-NameChar
+  // OTHER_NAME_CHARS = /[:\-.0-9\u00B7\u0300-\u036F\u203F-\u2040]/;
+  // Element names start with NAME_START_CHAR followed by optional other Unicode letters, ASCII digits, hyphens, underscores, and periods
+  // const TAG_NAME_RE = regex.concat(/[A-Z_a-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u02FF\u0370-\u037D\u037F-\u1FFF\u200C-\u200D\u2070-\u218F\u2C00-\u2FEF\u3001-\uD7FF\uF900-\uFDCF\uFDF0-\uFFFD]/, regex.optional(/[A-Z_a-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u02FF\u0370-\u037D\u037F-\u1FFF\u200C-\u200D\u2070-\u218F\u2C00-\u2FEF\u3001-\uD7FF\uF900-\uFDCF\uFDF0-\uFFFD\-.0-9\u00B7\u0300-\u036F\u203F-\u2040]*:/), /[A-Z_a-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u02FF\u0370-\u037D\u037F-\u1FFF\u200C-\u200D\u2070-\u218F\u2C00-\u2FEF\u3001-\uD7FF\uF900-\uFDCF\uFDF0-\uFFFD\-.0-9\u00B7\u0300-\u036F\u203F-\u2040]*/);;
+  // const XML_IDENT_RE = /[A-Z_a-z:\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u02FF\u0370-\u037D\u037F-\u1FFF\u200C-\u200D\u2070-\u218F\u2C00-\u2FEF\u3001-\uD7FF\uF900-\uFDCF\uFDF0-\uFFFD\-.0-9\u00B7\u0300-\u036F\u203F-\u2040]+/;
+  // const TAG_NAME_RE = regex.concat(/[A-Z_a-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u02FF\u0370-\u037D\u037F-\u1FFF\u200C-\u200D\u2070-\u218F\u2C00-\u2FEF\u3001-\uD7FF\uF900-\uFDCF\uFDF0-\uFFFD]/, regex.optional(/[A-Z_a-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u02FF\u0370-\u037D\u037F-\u1FFF\u200C-\u200D\u2070-\u218F\u2C00-\u2FEF\u3001-\uD7FF\uF900-\uFDCF\uFDF0-\uFFFD\-.0-9\u00B7\u0300-\u036F\u203F-\u2040]*:/), /[A-Z_a-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u02FF\u0370-\u037D\u037F-\u1FFF\u200C-\u200D\u2070-\u218F\u2C00-\u2FEF\u3001-\uD7FF\uF900-\uFDCF\uFDF0-\uFFFD\-.0-9\u00B7\u0300-\u036F\u203F-\u2040]*/);
+  // however, to cater for performance and more Unicode support rely simply on the Unicode letter class
+  const TAG_NAME_RE = regex.concat(/[\p{L}_]/u, regex.optional(/[\p{L}0-9_.-]*:/u), /[\p{L}0-9_.-]*/u);
+  const XML_IDENT_RE = /[\p{L}0-9._:-]+/u;
+  const XML_ENTITIES = {
+    className: 'symbol',
+    begin: /&[a-z]+;|&#[0-9]+;|&#x[a-f0-9]+;/
+  };
+  const XML_META_KEYWORDS = {
+    begin: /\s/,
+    contains: [
+      {
+        className: 'keyword',
+        begin: /#?[a-z_][a-z1-9_-]+/,
+        illegal: /\n/
+      }
+    ]
+  };
+  const XML_META_PAR_KEYWORDS = hljs.inherit(XML_META_KEYWORDS, {
+    begin: /\(/,
+    end: /\)/
+  });
+  const APOS_META_STRING_MODE = hljs.inherit(hljs.APOS_STRING_MODE, { className: 'string' });
+  const QUOTE_META_STRING_MODE = hljs.inherit(hljs.QUOTE_STRING_MODE, { className: 'string' });
+  const TAG_INTERNALS = {
+    endsWithParent: true,
+    illegal: /</,
+    relevance: 0,
+    contains: [
+      {
+        className: 'attr',
+        begin: XML_IDENT_RE,
+        relevance: 0
+      },
+      {
+        begin: /=\s*/,
+        relevance: 0,
+        contains: [
+          {
+            className: 'string',
+            endsParent: true,
+            variants: [
+              {
+                begin: /"/,
+                end: /"/,
+                contains: [ XML_ENTITIES ]
+              },
+              {
+                begin: /'/,
+                end: /'/,
+                contains: [ XML_ENTITIES ]
+              },
+              { begin: /[^\s"'=<>`]+/ }
+            ]
+          }
+        ]
+      }
+    ]
+  };
+  return {
+    name: 'HTML, XML',
+    aliases: [
+      'html',
+      'xhtml',
+      'rss',
+      'atom',
+      'xjb',
+      'xsd',
+      'xsl',
+      'plist',
+      'wsf',
+      'svg'
+    ],
+    case_insensitive: true,
+    unicodeRegex: true,
+    contains: [
+      {
+        className: 'meta',
+        begin: /<![a-z]/,
+        end: />/,
+        relevance: 10,
+        contains: [
+          XML_META_KEYWORDS,
+          QUOTE_META_STRING_MODE,
+          APOS_META_STRING_MODE,
+          XML_META_PAR_KEYWORDS,
+          {
+            begin: /\[/,
+            end: /\]/,
+            contains: [
+              {
+                className: 'meta',
+                begin: /<![a-z]/,
+                end: />/,
+                contains: [
+                  XML_META_KEYWORDS,
+                  XML_META_PAR_KEYWORDS,
+                  QUOTE_META_STRING_MODE,
+                  APOS_META_STRING_MODE
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      hljs.COMMENT(
+        /<!--/,
+        /-->/,
+        { relevance: 10 }
+      ),
+      {
+        begin: /<!\[CDATA\[/,
+        end: /\]\]>/,
+        relevance: 10
+      },
+      XML_ENTITIES,
+      // xml processing instructions
+      {
+        className: 'meta',
+        end: /\?>/,
+        variants: [
+          {
+            begin: /<\?xml/,
+            relevance: 10,
+            contains: [
+              QUOTE_META_STRING_MODE
+            ]
+          },
+          {
+            begin: /<\?[a-z][a-z0-9]+/,
+          }
+        ]
+
+      },
+      {
+        className: 'tag',
+        /*
+        The lookahead pattern (?=...) ensures that 'begin' only matches
+        '<style' as a single word, followed by a whitespace or an
+        ending bracket.
+        */
+        begin: /<style(?=\s|>)/,
+        end: />/,
+        keywords: { name: 'style' },
+        contains: [ TAG_INTERNALS ],
+        starts: {
+          end: /<\/style>/,
+          returnEnd: true,
+          subLanguage: [
+            'css',
+            'xml'
+          ]
+        }
+      },
+      {
+        className: 'tag',
+        // See the comment in the <style tag about the lookahead pattern
+        begin: /<script(?=\s|>)/,
+        end: />/,
+        keywords: { name: 'script' },
+        contains: [ TAG_INTERNALS ],
+        starts: {
+          end: /<\/script>/,
+          returnEnd: true,
+          subLanguage: [
+            'javascript',
+            'handlebars',
+            'xml'
+          ]
+        }
+      },
+      // we need this for now for jSX
+      {
+        className: 'tag',
+        begin: /<>|<\/>/
+      },
+      // open tag
+      {
+        className: 'tag',
+        begin: regex.concat(
+          /</,
+          regex.lookahead(regex.concat(
+            TAG_NAME_RE,
+            // <tag/>
+            // <tag>
+            // <tag ...
+            regex.either(/\/>/, />/, /\s/)
+          ))
+        ),
+        end: /\/?>/,
+        contains: [
+          {
+            className: 'name',
+            begin: TAG_NAME_RE,
+            relevance: 0,
+            starts: TAG_INTERNALS
+          }
+        ]
+      },
+      // close tag
+      {
+        className: 'tag',
+        begin: regex.concat(
+          /<\//,
+          regex.lookahead(regex.concat(
+            TAG_NAME_RE, />/
+          ))
+        ),
+        contains: [
+          {
+            className: 'name',
+            begin: TAG_NAME_RE,
+            relevance: 0
+          },
+          {
+            begin: />/,
+            relevance: 0,
+            endsParent: true
+          }
+        ]
+      }
+    ]
+  };
+}
+
+module.exports = xml;
 
 
 /***/ })

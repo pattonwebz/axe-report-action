@@ -2,6 +2,15 @@
 
 Notable changes to this action. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.5] — 2026-07-24
+
+### Changed
+
+- `@pattonwebz/axe-a11y-report` is now installed from the public npm registry (`^1.1.0`) instead
+  of a git-tag pin — [it's published now](https://www.npmjs.com/package/@pattonwebz/axe-a11y-report).
+  No behavior change: same package, same version bundled, re-verified against the same fixture
+  numbers before tagging.
+
 ## [0.0.4] — 2026-07-24
 
 ### Changed
